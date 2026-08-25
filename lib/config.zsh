@@ -32,12 +32,14 @@ expand_path() {
 }
 
 _config_strip_comment() {
+  setopt localoptions extendedglob
   local line="$1"
   [[ "$line" == [[:space:]]#\#* ]] && { print -r -- ""; return; }
   print -r -- "${line%%[[:space:]]##\#*}"
 }
 
 config_load() {
+  setopt localoptions extendedglob
   WT_CONFIG_FILE="$(config_file_path)"
   WT_CFG=() WT_PCFG=() WT_RCFG=() WT_PROJECTS=() WT_REPOS=()
   WT_CONFIG_EXISTS=0
@@ -107,6 +109,7 @@ config_get() {
 # Rewrites the file line by line, replacing the key inside its section, appending the key
 # at the end of the section, or appending a new section. Comments and order are preserved.
 _config_write() {
+  setopt localoptions extendedglob
   local want_type="$1" want_name="$2" key="$3" value="$4" delete="$5"
   local file tmp line cur_type="" cur_name="" in_target=0 seen_target=0 done=0
   file="$(config_file_path)"
@@ -146,6 +149,7 @@ config_unset() { local REPLY_TYPE REPLY_NAME REPLY_KEY; _config_split_key "$1"; 
 
 # config_remove_section <project|repo> <name>: drops the header and every line until the next header
 config_remove_section() {
+  setopt localoptions extendedglob
   local want_type="$1" want_name="$2" file tmp line skipping=0
   file="$(config_file_path)"
   [[ -f "$file" ]] || return 0

@@ -4,9 +4,10 @@ source "${0:A:h}/helpers.zsh"
 # config_unset and config_remove_section have no CLI surface (cmd_config only exposes
 # path|get|set|edit, and the brief doesn't ask for more) so they're reached the same way the
 # rest of the suite reaches library internals it doesn't have a command for: source the module
-# directly and call the functions in-process. bin/workytree runs under `setopt extendedglob`
-# (lib/config.zsh's "#" quantifiers in glob patterns depend on it), so set it here too.
-setopt extendedglob
+# directly and call the functions in-process. lib/config.zsh guards its own extendedglob-dependent
+# patterns internally (setopt localoptions extendedglob per function), so this test file
+# deliberately does NOT set extendedglob itself — that absence is what proves the module is
+# self-sufficient rather than relying on the caller's option state.
 source "$WT_TEST_ROOT/lib/ui.zsh"
 source "$WT_TEST_ROOT/lib/config.zsh"
 
