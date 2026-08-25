@@ -160,4 +160,26 @@ test_path_from_dotgit_or_bare_repo_errors_cleanly() {
   assert_contains "$out" "work tree"
 }
 
+# R29: registered_repos (all_repos' source for the bare `workytree prune` sweep, and
+# `workytree repos`) must never surface a repo whose NAME is itself unsafe to concatenate
+# into a filesystem path -- see is_safe_repo_name in lib/resolve.zsh. The prune-level
+# consequence (an unsafe name escaping worktree_root and deleting something outside it) is
+# pinned in tests/prune.test.zsh; this pins the filtering choke point itself.
+test_repos_ignores_unsafe_registered_repo_name() {
+  make_repo "$HOME/src/normal"
+  write_config <<EOF
+[project me]
+repo_root = ~/src
+worktree_root = ~/wts
+[repo ..]
+path = ~/wts
+project = me
+EOF
+  local out; out="$(wt repos 2>&1)"
+  assert_contains "$out" "normal"
+  assert_contains "$out" "ignoring unsafe repo name in config: .."
+  local -a names; names=(${(f)"$(wt repos 2>/dev/null | cut -f1)"})
+  assert_eq "${names[(Ie)..]}" "0"
+}
+
 run_tests

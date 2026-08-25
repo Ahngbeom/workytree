@@ -8,9 +8,38 @@ require_config() {
     error "no [project] defined in $WT_CONFIG_FILE"
     error "run 'workytree project add <name> <repo_root> <worktree_root>'"; exit 3
   fi
+  # R27/C-1: a [project] section is only meaningful with BOTH repo_root and worktree_root --
+  # every path-building helper below (worktree_parent, worktree_path) concatenates
+  # worktree_root with a repo/kind/ticket name unconditionally. A project missing (or with an
+  # empty) worktree_root collapses that concatenation to "/$repo" at filesystem root; a repo
+  # whose name happens to collide with a real top-level directory (etc, tmp, usr, bin, home,
+  # Users, private, ...) then makes `prune` walk and delete real system directories -- this
+  # was reproduced end-to-end against an instrumented copy. Reject the missing invariant here,
+  # for every command that reaches require_config, rather than downstream in each command that
+  # happens to build a path from it.
+  local p
+  for p in "${WT_PROJECTS[@]}"; do
+    [[ -n "$(project_repo_root "$p")" ]] || { error "project '$p' is missing repo_root in $WT_CONFIG_FILE"; exit 3; }
+    [[ -n "$(project_worktree_root "$p")" ]] || { error "project '$p' is missing worktree_root in $WT_CONFIG_FILE"; exit 3; }
+  done
   if [[ -n "$WT_PROJECT_OPT" ]] && ! project_exists "$WT_PROJECT_OPT"; then
     die "unknown project: $WT_PROJECT_OPT (run 'workytree project list')"
   fi
+}
+
+# is_safe_repo_name <name>: false for empty, a bare path separator, or a dot-relative path
+# component ("." or ".."). Repo names come straight from config -- an attacker- or
+# typo-editable `[repo <name>]` section key today, reachable without hand-editing once `repo
+# add --name` exists -- and get concatenated directly into filesystem paths by
+# worktree_parent/worktree_path ("$worktree_root/$repo/..."). An unfiltered ".." lets that
+# concatenation canonicalize OUTSIDE worktree_root entirely; reproduced with a config
+# containing `[repo ..]`, where `prune` deleted a directory outside
+# <worktree_root>/<repo>/ despite every containment check that compares against a path
+# DERIVED from the repo name passing "by construction" (the escape happens before any of
+# those checks run). R29.
+is_safe_repo_name() {
+  local n="$1"
+  [[ -n "$n" && "$n" != "." && "$n" != ".." && "$n" != */* ]]
 }
 
 project_exists()        { (( ${WT_PROJECTS[(Ie)$1]} )); }
@@ -34,6 +63,14 @@ registered_repos() {
   for n in "${WT_REPOS[@]}"; do
     p="${WT_RCFG[$n.project]:-}"
     [[ -n "$filter" && "$p" != "$filter" ]] && continue
+    # R29: never surface a registered repo whose NAME is itself unsafe to concatenate into a
+    # filesystem path (see is_safe_repo_name) -- this is the choke point `all_repos` (and
+    # therefore bare `workytree prune`'s all-repos sweep) reads registered repos through, so
+    # filtering here keeps an unsafe name out of every caller at once.
+    if ! is_safe_repo_name "$n"; then
+      error "ignoring unsafe repo name in config: $n"
+      continue
+    fi
     print -r -- "$n"$'\t'"$p"$'\t'"$(expand_path "${WT_RCFG[$n.path]:-}")"
   done
 }
@@ -78,6 +115,11 @@ resolve_repo() {
   local name="$1" filter="${2:-$WT_PROJECT_OPT}" p rn rp rpath line phys winner idx
   local -a matches matches_phys
   if (( ${WT_REPOS[(Ie)$name]} )); then
+    # R29: this branch matched because $name IS a registered [repo] section key -- validate
+    # that key before trusting it to build a filesystem path anywhere downstream.
+    if ! is_safe_repo_name "$name"; then
+      error "unsafe repo name: $name"; exit 1
+    fi
     p="${WT_RCFG[$name.project]:-}"
     if [[ -z "$filter" || "$p" == "$filter" ]]; then
       print -r -- "$p"$'\t'"$(expand_path "${WT_RCFG[$name.path]:-}")"; return 0
@@ -87,6 +129,10 @@ resolve_repo() {
     [[ -n "$filter" && "$p" != "$filter" ]] && continue
     while IFS=$'\t' read -r rn rp rpath; do
       [[ "$rn" == "$name" ]] || continue
+      # Defensive: scan_project_repos derives rn from a real directory basename, which can't
+      # structurally be "." or "..", but never trust that structural argument alone this deep
+      # into a function that feeds worktree_parent/worktree_path.
+      is_safe_repo_name "$rn" || continue
       # Collapse candidates naming the same PHYSICAL repo (nested/overlapping repo_roots):
       # the project whose repo_root is the longest matching prefix wins. Reuse
       # project_of_path's own longest-prefix rule instead of re-deriving it here (R18).

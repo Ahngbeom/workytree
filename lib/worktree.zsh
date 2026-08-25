@@ -108,8 +108,21 @@ has_initialized_submodules() {
 # look like cruft when the real path doesn't; `! -type d` (rather than `-type f`) so a
 # symlink or other non-regular entry counts as real content instead of being invisible to
 # the scan.
+#
+# R28/C-2: `find` reports each entry PREFIXED by the argument you gave it ("$1/..."), so
+# matching an entry's path is only safe RELATIVE to $1 -- matching the raw absolute path
+# (as an earlier version of this function did, via a bare `*/.idea/*` glob) means ANY
+# ".idea" path component ABOVE the candidate, including the candidate's own name or an
+# ancestor of worktree_root, makes the glob match every file inside and misreports real
+# content as cruft. Reproduced twice: a ticket directory literally named ".idea" had a real
+# file inside it deleted, and a worktree_root nested under "~/.idea/wts" made every orphan
+# underneath look like cruft regardless of content. Every entry is stripped of the "$1/"
+# prefix before classification, so only path components INSIDE the candidate count. This is
+# Task 6's helper; prune (Task 7) is its first DELETING caller, which is exactly what turns
+# a misclassification into permanent, unrecoverable loss -- so getting the anchor right here
+# is squarely in scope for this task.
 dir_is_cruft_only() {
-  local f out_file err_file rc err
+  local f rel base out_file err_file rc err
   out_file="$(mktemp 2>/dev/null)" || return 1
   err_file="$(mktemp 2>/dev/null)" || { rm -f "$out_file"; return 1; }
   find "$1" -mindepth 1 ! -type d -print0 >"$out_file" 2>"$err_file"
@@ -117,8 +130,17 @@ dir_is_cruft_only() {
   err="$(<"$err_file" 2>/dev/null)"
   rm -f "$err_file"
   if (( rc != 0 )) || [[ -n "$err" ]]; then rm -f "$out_file"; return 1; fi
+  base="${1%/}/"
   while IFS= read -r -d '' f; do
-    case "$f" in */.idea/*) ;; */.DS_Store) ;; *) rm -f "$out_file"; return 1 ;; esac
+    rel="${f#$base}"
+    # R25 still holds relative to the candidate: a FILE named exactly ".idea" (no slash
+    # after it -- distinct from a ".idea/" DIRECTORY's contents) never matches either
+    # alternative below, so it falls through to "real work", regardless of depth.
+    case "$rel" in
+      .idea/*|*/.idea/*) ;;
+      .DS_Store|*/.DS_Store) ;;
+      *) rm -f "$out_file"; return 1 ;;
+    esac
   done < "$out_file"
   rm -f "$out_file"
   return 0

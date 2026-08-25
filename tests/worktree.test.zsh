@@ -48,4 +48,25 @@ test_cruft_only_empty_dir_is_cruft() {
   assert_exit 0 dir_is_cruft_only "$TMP_ROOT/d5"
 }
 
+# R28/C-2: `find "$1" ...` prefixes every result with the argument you gave it, so matching
+# an entry's path is only safe RELATIVE to $1. Reproduced against the real binary: a
+# worktree_root nested under "~/.idea/wts" made an orphan holding only a real file look like
+# cruft, because ".idea" appeared as an ANCESTOR of the candidate, not inside it. Pin the
+# fix directly: a candidate two levels under a ".idea" directory, holding one real file, must
+# never be classified as cruft.
+test_cruft_only_ancestor_idea_component_does_not_fool_relative_match() {
+  mkdir -p "$TMP_ROOT/.idea/sub"
+  print "real content" > "$TMP_ROOT/.idea/sub/real.txt"
+  assert_exit 1 dir_is_cruft_only "$TMP_ROOT/.idea/sub"
+}
+
+# R25, re-pinned against the fixed (relative) matching: a FILE literally named ".idea" (not
+# a directory -- distinct from a ".idea/" directory's own contents) holding real content is
+# real work, never cruft, regardless of depth.
+test_cruft_only_idea_named_file_is_real_work() {
+  mkdir -p "$TMP_ROOT/d6/sub"
+  print "not actually IDE state" > "$TMP_ROOT/d6/sub/.idea"
+  assert_exit 1 dir_is_cruft_only "$TMP_ROOT/d6"
+}
+
 run_tests
