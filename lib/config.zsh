@@ -110,7 +110,17 @@ config_load() {
   if [[ ! -f "$WT_CONFIG_FILE" ]]; then
     _config_load_fail "config path exists but is not a regular file: $WT_CONFIG_FILE"; return 1
   fi
-  if [[ ! -r "$WT_CONFIG_FILE" ]]; then
+  # R43: readability is OBSERVED, not predicted. `-r` reports what the permission bits say
+  # open() *should* do; on a filesystem where those disagree with the real answer (unusual
+  # ACLs, some network filesystems) a `-r` pre-check waves the file through and the actual
+  # `< "$WT_CONFIG_FILE"` below fails at the shell level instead -- reinstating exactly the
+  # Finding-1 defect this classification exists to prevent (raw "permission denied" on
+  # stderr, WT_CONFIG_LOAD_ERROR left empty, `config get` reporting "key not set"). Opening
+  # the file for real and discarding it is the same open() the read below performs, with its
+  # own diagnostic suppressed, so the verdict cannot disagree with what actually happens.
+  # `: < file` opens and closes immediately -- no fd stays alive, so nothing downstream (the
+  # parse loop's own early `return 1`s included) has an fd lifetime to manage.
+  if ! { : < "$WT_CONFIG_FILE" } 2>/dev/null; then
     _config_load_fail "config file exists but is not readable (check permissions): $WT_CONFIG_FILE"; return 1
   fi
   WT_CONFIG_EXISTS=1
@@ -180,18 +190,79 @@ config_get() {
   esac
 }
 
-# _config_refuse_if_unwritable_target <file>: die (exit 1) if <file> EXISTS but isn't a
-# usable write target -- a regular file this process can write to. R41/Finding 2: without
-# this check, a DIRECTORY sitting at the config path let `_config_write` touch-create fail
-# loudly-but-harmlessly ("is a directory" on stderr) and then `mv "$tmp" "$file"` SILENTLY
-# SUCCEED anyway (mv-into-a-directory is valid mv usage, not a bug in mv) -- `cmd_init`
-# reported "added project x" / "config written" and exit 0 while writing nothing and
-# leaving a stray temp-named file inside the directory. Called BEFORE `mktemp` runs in
-# every caller below, so a refusal here never leaves a temp file behind to clean up.
-_config_refuse_if_unwritable_target() {
-  local file="$1"
-  [[ -e "$file" && ! -f "$file" ]] && die "config path exists but is not a regular file: $file"
-  [[ -e "$file" && ! -w "$file" ]] && die "config file exists but is not writable (check permissions): $file"
+# _config_die_state <message>: a config-FILE-STATE failure raised from a WRITE path.
+# Exit 3, not die()'s exit 1: nothing about the user's ARGUMENTS is wrong when the config
+# directory is read-only or the config path is occupied by a directory -- it is the state
+# of the config file/its location that makes the command impossible, which is the exact
+# category this tool reserves exit 3 for on the READ side already (require_loadable_config
+# /require_config, lib/resolve.zsh; R31/R39). Same category, same code.
+_config_die_state() { error "$1"; exit 3; }
+
+# _config_prepare_write_target <file>: refuse -- with workytree's own prefixed message,
+# exit 3, and nothing created or left behind -- every reason the temp-file-plus-rename
+# strategy the writers below use could not actually complete. On success sets
+# REPLY_WRITE_TARGET to the path to actually write (a symlink resolved to its target, so
+# the link is preserved and its target updated).
+#
+# R42: `mktemp`+`mv` need a writable *containing directory*, which is a different question
+# from whether the config FILE is writable. A read-only directory holding a mode-644 config
+# passed the old file-only `-w` check, then `mktemp` failed (raw "mkstemp failed ...
+# Permission denied"), `> "$tmp"` failed against the resulting empty path (raw "no such file
+# or directory"), `mv "" "$file"` failed (raw "mv: : No such file or directory") -- and
+# because not one of those three exit statuses was ever checked, `_config_write` returned 0
+# and its caller printed "set default_project = me" over a file it had not touched. Every
+# refusal below happens BEFORE any temp file exists and BEFORE any caller reaches its
+# success message; the writers additionally check each external command's own exit status
+# afterwards, so a failure these predicates cannot foresee still refuses instead of
+# reporting a write that did not happen.
+#
+# R41/Finding 2 (still enforced here): a DIRECTORY at the config path made `mv "$tmp"
+# "$file"` SILENTLY SUCCEED -- mv-into-a-directory is valid mv usage, not a bug in mv --
+# leaving a stray temp-named file inside it while `cmd_init` reported success.
+typeset -g REPLY_WRITE_TARGET=""
+_config_prepare_write_target() {
+  local file="$1" dir="${file:h}"
+
+  # 1. The parent tree ("~/.config/workytree") is created on demand -- mkdir -p prints its
+  #    own raw diagnostic and returns non-zero when it cannot, so suppress and re-report.
+  if [[ ! -d "$dir" ]]; then
+    mkdir -p "$dir" 2>/dev/null || _config_die_state "could not create the config directory (check permissions): $dir"
+  fi
+
+  # 2. Whatever already occupies the path must be a regular file this process can write.
+  [[ -e "$file" && ! -f "$file" ]] && _config_die_state "config path exists but is not a regular file: $file"
+  [[ -e "$file" && ! -w "$file" ]] && _config_die_state "config file exists but is not writable (check permissions): $file"
+
+  # 3. Create it if absent. Done through the ORIGINAL path so a dangling symlink is written
+  #    THROUGH (the link creating its own target) rather than replaced.
+  if [[ ! -e "$file" ]]; then
+    { : > "$file" } 2>/dev/null || _config_die_state "could not create the config file (check permissions): $file"
+  fi
+
+  # 4. Resolve a symlink: the temp file, the rename, and the directory that must accept both
+  #    all belong to the link's TARGET, not to the directory the link happens to live in.
+  [[ -L "$file" ]] && file="${file:A}"
+  dir="${file:h}"
+
+  # 5. The containing directory must accept a new entry (mktemp) and a rename (mv). This is
+  #    the check R42 was missing entirely.
+  [[ -w "$dir" && -x "$dir" ]] || _config_die_state "config directory is not writable (check permissions): $dir"
+
+  # 6. Both writers READ the file back line by line to patch one line in place. Probe the
+  #    open for real rather than trusting `-r` (R43, same reasoning as config_load's).
+  { : < "$file" } 2>/dev/null || _config_die_state "config file exists but is not readable (check permissions): $file"
+
+  REPLY_WRITE_TARGET="$file"
+}
+
+# _config_mktemp <target-file>: creates the sibling temp file, refusing (exit 3, no
+# leftovers) if mktemp itself fails -- the status R42 found unchecked. Sets REPLY_TMP.
+typeset -g REPLY_TMP=""
+_config_mktemp() {
+  local file="$1" tmp
+  tmp="$(mktemp "${file}.XXXXXX" 2>/dev/null)" || tmp=""
+  [[ -n "$tmp" ]] || _config_die_state "could not create a temporary file in the config directory (check permissions): ${file:h}"
+  REPLY_TMP="$tmp"
 }
 
 # _config_write <type> <name> <key> <value> <delete:0|1>
@@ -202,11 +273,8 @@ _config_write() {
   local want_type="$1" want_name="$2" key="$3" value="$4" delete="$5"
   local file tmp line cur_type="" cur_name="" in_target=0 seen_target=0 done=0
   file="$(config_file_path)"
-  mkdir -p "${file:h}"
-  _config_refuse_if_unwritable_target "$file"
-  [[ -f "$file" ]] || : > "$file"
-  [[ -L "$file" ]] && file="${file:A}"
-  tmp="$(mktemp "${file}.XXXXXX")"
+  _config_prepare_write_target "$file"; file="$REPLY_WRITE_TARGET"
+  _config_mktemp "$file"; tmp="$REPLY_TMP"
   [[ -z "$want_type" ]] && { in_target=1; seen_target=1; }
   {
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -230,8 +298,23 @@ _config_write() {
         print -r -- ""; print -r -- "[$want_type $want_name]"; print -r -- "$key = $value"
       fi
     fi
-  } > "$tmp"
-  mv "$tmp" "$file"
+  } > "$tmp" || _config_write_failed "$tmp" "$file"
+  _config_commit_temp "$tmp" "$file"
+}
+
+# _config_write_failed <tmp> <file> / _config_commit_temp <tmp> <file>: the two remaining
+# unchecked external steps R42 named. Producing the new content can fail after the temp
+# file exists (a full disk, a quota), and `mv` can fail on its own; either way the temp
+# file is removed first so a refusal never leaves one behind, and the refusal happens
+# before any caller's success message.
+_config_write_failed() {
+  rm -f "$1" 2>/dev/null
+  _config_die_state "could not write the updated config (check permissions and free space): $2"
+}
+_config_commit_temp() {
+  mv "$1" "$2" 2>/dev/null && return 0
+  rm -f "$1" 2>/dev/null
+  _config_die_state "could not replace the config file (check permissions): $2"
 }
 
 config_set()   { local REPLY_TYPE REPLY_NAME REPLY_KEY; _config_split_key "$1"; _config_write "$REPLY_TYPE" "$REPLY_NAME" "$REPLY_KEY" "$2" 0; config_load; }
@@ -243,12 +326,12 @@ config_remove_section() {
   local want_type="$1" want_name="$2" file tmp line skipping=0
   file="$(config_file_path)"
   # Nothing at all there -> nothing to remove, same no-op as always. Something there that
-  # ISN'T a usable regular file (a directory, unwritable) -> refuse loudly (R41) rather than
-  # silently no-op past it, the same choke point _config_write uses.
+  # ISN'T a usable write target (a directory, an unwritable file, a read-only containing
+  # directory, ...) -> refuse loudly (R41/R42) rather than silently no-op past it, through
+  # the same choke point _config_write uses.
   [[ -e "$file" ]] || return 0
-  _config_refuse_if_unwritable_target "$file"
-  [[ -L "$file" ]] && file="${file:A}"
-  tmp="$(mktemp "${file}.XXXXXX")"
+  _config_prepare_write_target "$file"; file="$REPLY_WRITE_TARGET"
+  _config_mktemp "$file"; tmp="$REPLY_TMP"
   {
     while IFS= read -r line || [[ -n "$line" ]]; do
       line="${line%$'\r'}"
@@ -258,7 +341,7 @@ config_remove_section() {
       fi
       (( skipping )) || print -r -- "$line"
     done < "$file"
-  } > "$tmp"
-  mv "$tmp" "$file"
+  } > "$tmp" || _config_write_failed "$tmp" "$file"
+  _config_commit_temp "$tmp" "$file"
   config_load
 }

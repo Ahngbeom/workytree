@@ -476,9 +476,143 @@ test_config_write_itself_refuses_directory_target_leaves_no_temp_file() {
   local dir="$XDG_CONFIG_HOME/workytree/config"
   mkdir -p "$dir"
   local out; out="$(config_set default_project x 2>&1)"
-  assert_eq "$?" "1"
+  # R42 (fix round 4): 3, not the 1 this asserted in round 3. A write that cannot proceed
+  # because of the STATE of the config file or its location is the same category
+  # require_loadable_config/require_config already exit 3 for on the read side -- nothing
+  # about the user's arguments is wrong. See lib/config.zsh's _config_die_state.
+  assert_eq "$?" "3"
   assert_contains "$out" "not a regular file"
   assert_eq "$(print -l -- "$dir"/*(N))" ""
+}
+
+# R42 (fix round 4 of Task 11): the config DIRECTORY read-only while the config FILE itself
+# is writable (mode 644). The old guard checked `-w` on the FILE only, which is the wrong
+# question for a temp-file-plus-rename write: `mktemp` failed ("mkstemp failed ...
+# Permission denied"), `> "$tmp"` failed against the empty path it left behind ("no such
+# file or directory"), `mv "" "$file"` failed ("mv: : No such file or directory") -- and
+# because none of those three exit statuses was checked, `config set` printed
+# "set default_project = me" and exited 0 over a file it had never touched.
+#
+# R23: exit code alone would not catch a regression here (plenty of failures exit non-zero),
+# so every case asserts workytree's OWN wording -- "config directory is not writable (check
+# permissions)" / "could not create the config file (check permissions)", both authored in
+# lib/config.zsh and emitted by nothing else -- AND that the success message is absent AND
+# that no raw shell diagnostic (mktemp's/mv's/zsh's own) leaked to stderr.
+_assert_no_raw_shell_diagnostic() {
+  local err="$1" what="$2" pat
+  for pat in "mktemp:" "mv:" "mkstemp" "_config_write:" "_config_prepare_write_target:" \
+             "config_remove_section:" "no such file or directory" "permission denied:"; do
+    if [[ "$err" == *"$pat"* ]]; then
+      (( ++_fail )); print -u2 "  FAIL: raw shell diagnostic [$pat] leaked from $what: $err"
+      print >> "$WT_FAIL_FILE" "FAIL: raw shell diagnostic [$pat] leaked from $what: $err"
+      return
+    fi
+  done
+  (( ++_pass ))
+}
+
+test_readonly_config_directory_refuses_every_write_path() {
+  make_repo "$HOME/src/app"
+  write_config <<'EOF'
+# keep me
+kinds = feature,fix
+
+[project me]
+repo_root = ~/src
+worktree_root = ~/wts
+EOF
+  local dir="$XDG_CONFIG_HOME/workytree" cfg="$XDG_CONFIG_HOME/workytree/config"
+  local before; before="$(cat "$cfg")"
+  chmod 644 "$cfg"
+  chmod 555 "$dir"
+
+  local errfile; errfile="$(mktemp)"
+  local out rc
+
+  # config set -> _config_write
+  out="$(wt config set default_project me 2>"$errfile")"; rc=$?
+  assert_eq "$rc" "3" "config set on a read-only config directory"
+  assert_eq "$out" "" "config set must print no success line"
+  assert_contains "$(cat "$errfile")" "config directory is not writable"
+  _assert_no_raw_shell_diagnostic "$(cat "$errfile")" "config set"
+
+  # project add -> config_set
+  out="$(wt project add two ~/src ~/wts 2>"$errfile")"; rc=$?
+  assert_eq "$rc" "3" "project add on a read-only config directory"
+  [[ "$out" == *"added project"* ]] && { (( ++_fail )); print -u2 "  FAIL: project add claimed success: $out"; print >> "$WT_FAIL_FILE" "FAIL: project add claimed success"; } || (( ++_pass ))
+  assert_contains "$(cat "$errfile")" "config directory is not writable"
+  _assert_no_raw_shell_diagnostic "$(cat "$errfile")" "project add"
+
+  # repo add -> config_set
+  out="$(wt repo add "$HOME/src/app" 2>"$errfile")"; rc=$?
+  assert_eq "$rc" "3" "repo add on a read-only config directory"
+  [[ "$out" == *"registered repo"* ]] && { (( ++_fail )); print -u2 "  FAIL: repo add claimed success: $out"; print >> "$WT_FAIL_FILE" "FAIL: repo add claimed success"; } || (( ++_pass ))
+  assert_contains "$(cat "$errfile")" "config directory is not writable"
+  _assert_no_raw_shell_diagnostic "$(cat "$errfile")" "repo add"
+
+  # project default -> config_set
+  out="$(wt project default me 2>"$errfile")"; rc=$?
+  assert_eq "$rc" "3" "project default on a read-only config directory"
+  assert_eq "$out" "" "project default must print no success line"
+  assert_contains "$(cat "$errfile")" "config directory is not writable"
+
+  # project remove -> config_remove_section (a DIFFERENT writer, same choke point)
+  out="$(wt project remove me 2>"$errfile")"; rc=$?
+  assert_eq "$rc" "3" "project remove on a read-only config directory"
+  assert_eq "$out" "" "project remove must print no success line"
+  assert_contains "$(cat "$errfile")" "config directory is not writable"
+  _assert_no_raw_shell_diagnostic "$(cat "$errfile")" "project remove"
+
+  # config_unset, reached in-process (no CLI surface -- this file's header comment)
+  out="$(config_unset default_project 2>&1)"; rc=$?
+  assert_eq "$rc" "3" "config_unset on a read-only config directory"
+  assert_contains "$out" "config directory is not writable"
+
+  rm -f "$errfile"
+  assert_eq "$(cat "$cfg")" "$before" "the config file must be untouched"
+  assert_eq "$(print -l -- "$dir"/*(N))" "$cfg" "no temp file left behind"
+  chmod 755 "$dir"  # restore before teardown_env's rm -rf, and before any later run
+}
+
+# Same read-only directory, but with NO config file yet: the very first write must refuse
+# at the create step rather than report a config it could not write.
+test_readonly_config_directory_refuses_first_write() {
+  local dir="$XDG_CONFIG_HOME/workytree"
+  mkdir -p "$dir"
+  chmod 555 "$dir"
+  local errfile; errfile="$(mktemp)"
+  local out rc
+
+  out="$(wt init x ~/src ~/wts 2>"$errfile")"; rc=$?
+  assert_eq "$rc" "3" "init into a read-only config directory"
+  [[ "$out" == *"config written"* || "$out" == *"added project"* ]] && { (( ++_fail )); print -u2 "  FAIL: init claimed success: $out"; print >> "$WT_FAIL_FILE" "FAIL: init claimed success"; } || (( ++_pass ))
+  assert_contains "$(cat "$errfile")" "could not create the config file"
+  _assert_no_raw_shell_diagnostic "$(cat "$errfile")" "init"
+  assert_eq "$(print -l -- "$dir"/*(N))" "" "nothing created in the read-only directory"
+
+  # `config edit` is the recovery path and must still reach the editor -- and must not leak
+  # its own touch-create diagnostic while getting there (R42).
+  out="$(EDITOR=true wt config edit 2>&1)"; rc=$?
+  assert_eq "$rc" "0" "config edit must still reach the editor"
+  _assert_no_raw_shell_diagnostic "$out" "config edit"
+
+  rm -f "$errfile"
+  chmod 755 "$dir"
+}
+
+# The config PARENT tree cannot be created at all (its own parent is read-only). Distinct
+# from the two cases above: this refusal comes from _config_prepare_write_target's checked
+# `mkdir -p`, not from the file-create or directory-writability steps.
+test_uncreatable_config_directory_refuses() {
+  mkdir -p "$HOME/locked"
+  chmod 555 "$HOME/locked"
+  export WORKYTREE_CONFIG="$HOME/locked/deeper/config"
+  local out; out="$(wt project add me ~/src ~/wts 2>&1)"
+  assert_eq "$?" "3"
+  assert_contains "$out" "could not create the config directory"
+  _assert_no_raw_shell_diagnostic "$out" "project add into an uncreatable directory"
+  assert_not_exists "$HOME/locked/deeper"
+  chmod 755 "$HOME/locked"
 }
 
 run_tests

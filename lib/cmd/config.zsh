@@ -21,7 +21,14 @@ cmd_config() {
     # editor). `edit` still execs the editor on whatever is actually there either way --
     # it is the tool's own recovery path for every config-broken shape (R38), including
     # ones this process can't itself write a fresh empty file over.
-    edit) local f; f="$(config_file_path)"; mkdir -p "${f:h}"; [[ -e "$f" ]] || : > "$f"
+    # R42: both preparation steps are BEST-EFFORT and silenced. `edit` must reach the
+    # editor for every broken shape (it is the recovery path), so it must not refuse the
+    # way the config WRITERS now do -- but it also must not leak `mkdir`'s or the
+    # redirection's own raw diagnostic when the directory is read-only. Neither step's
+    # failure is a success claim: whatever the editor then reports about a file it cannot
+    # open is between it and the user.
+    edit) local f; f="$(config_file_path)"; mkdir -p "${f:h}" 2>/dev/null
+          [[ -e "$f" ]] || { : > "$f" } 2>/dev/null
           exec "${VISUAL:-${EDITOR:-vi}}" "$f" ;;
     *)    usage_error "usage: workytree config path|get <key>|set <key> <value>|edit" ;;
   esac
