@@ -4,6 +4,14 @@ WT_BIN="$WT_TEST_ROOT/bin/workytree"
 typeset -gi _pass=0 _fail=0
 typeset -g TMP_ROOT=""
 
+# assert_* failures inside a `$(...)` command substitution run in a subshell, so the
+# `(( ++_fail ))` increment never reaches the parent shell's counter. This file mirrors
+# every failure here too, so run_tests can detect a failure even when the in-process
+# counter was silently swallowed by a subshell. $$ is the top-level script's PID and does
+# not change inside command substitutions in zsh, so this path is stable for the whole run.
+typeset -g WT_FAIL_FILE="${TMPDIR:-/tmp}/wt-test-fail.$$"
+: > "$WT_FAIL_FILE"
+
 setup_env() {
   TMP_ROOT="$(mktemp -d)"
   export HOME="$TMP_ROOT/home"
@@ -29,18 +37,18 @@ write_config() { mkdir -p "$XDG_CONFIG_HOME/workytree"; cat > "$XDG_CONFIG_HOME/
 wt() { "$WT_BIN" "$@" < /dev/null; }
 
 assert_eq() {
-  if [[ "$1" == "$2" ]]; then (( ++_pass )); else (( ++_fail )); print -u2 "  FAIL ${3:-}: expected [$2] got [$1]"; fi
+  if [[ "$1" == "$2" ]]; then (( ++_pass )); else (( ++_fail )); print -u2 "  FAIL ${3:-}: expected [$2] got [$1]"; print >> "$WT_FAIL_FILE" "FAIL ${3:-}: expected [$2] got [$1]"; fi
 }
 assert_contains() {
-  if [[ "$1" == *"$2"* ]]; then (( ++_pass )); else (( ++_fail )); print -u2 "  FAIL ${3:-}: [$1] does not contain [$2]"; fi
+  if [[ "$1" == *"$2"* ]]; then (( ++_pass )); else (( ++_fail )); print -u2 "  FAIL ${3:-}: [$1] does not contain [$2]"; print >> "$WT_FAIL_FILE" "FAIL ${3:-}: [$1] does not contain [$2]"; fi
 }
 assert_exit() {
   local want="$1"; shift
   "$@" >/dev/null 2>&1; local got=$?
   assert_eq "$got" "$want" "exit code of: $*"
 }
-assert_dir() { if [[ -d "$1" ]]; then (( ++_pass )); else (( ++_fail )); print -u2 "  FAIL: dir missing $1"; fi }
-assert_not_exists() { if [[ ! -e "$1" ]]; then (( ++_pass )); else (( ++_fail )); print -u2 "  FAIL: exists $1"; fi }
+assert_dir() { if [[ -d "$1" ]]; then (( ++_pass )); else (( ++_fail )); print -u2 "  FAIL: dir missing $1"; print >> "$WT_FAIL_FILE" "FAIL: dir missing $1"; fi }
+assert_not_exists() { if [[ ! -e "$1" ]]; then (( ++_pass )); else (( ++_fail )); print -u2 "  FAIL: exists $1"; print >> "$WT_FAIL_FILE" "FAIL: exists $1"; fi }
 
 run_tests() {
   local t
@@ -50,6 +58,16 @@ run_tests() {
     $t
     teardown_env
   done
-  print "$_pass passed, $_fail failed"
-  (( _fail == 0 ))
+  local -i file_fail
+  file_fail=$(grep -c . "$WT_FAIL_FILE" 2>/dev/null)
+  file_fail=${file_fail:-0}
+  if (( file_fail > _fail )); then
+    print "$_pass passed, $file_fail failed"
+  else
+    print "$_pass passed, $_fail failed"
+  fi
+  local -i ok=1
+  (( _fail == 0 && file_fail == 0 )) || ok=0
+  rm -f "$WT_FAIL_FILE"
+  (( ok ))
 }
