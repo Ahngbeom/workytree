@@ -15,7 +15,13 @@ cmd_config() {
     set)  [[ -z "$WT_CONFIG_LOAD_ERROR" ]] || { error "$WT_CONFIG_LOAD_ERROR"; exit 1; }
           [[ $# -eq 2 ]] || usage_error "usage: workytree config set <key> <value>"
           config_set "$1" "$2"; success "set $1 = $2" ;;
-    edit) local f; f="$(config_file_path)"; mkdir -p "${f:h}"; [[ -f "$f" ]] || : > "$f"
+    # R41: `-e` (not `-f`) guards the touch-create -- a directory or other non-regular
+    # occupant at the config path is left alone rather than attempting `: > "$f"` against
+    # it (which would fail with a raw "is a directory" diagnostic before ever reaching the
+    # editor). `edit` still execs the editor on whatever is actually there either way --
+    # it is the tool's own recovery path for every config-broken shape (R38), including
+    # ones this process can't itself write a fresh empty file over.
+    edit) local f; f="$(config_file_path)"; mkdir -p "${f:h}"; [[ -e "$f" ]] || : > "$f"
           exec "${VISUAL:-${EDITOR:-vi}}" "$f" ;;
     *)    usage_error "usage: workytree config path|get <key>|set <key> <value>|edit" ;;
   esac

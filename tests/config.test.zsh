@@ -303,11 +303,15 @@ test_broken_config_get_and_set_exit_1_with_message() {
   assert_contains "$out" "config:2"
 }
 
+# R41 (fix round 3): `init` against a config that failed to PARSE now names the SPECIFIC
+# recorded failure (the same "config:N" message every other consumer surfaces), not the
+# generic "config already exists" -- that generic text would be misleading here since no
+# USABLE config, valid or otherwise, actually exists at this path yet.
 test_broken_config_init_still_refuses() {
   _broken_config
   local out; out="$(wt init x ~/a ~/b 2>&1)"
   assert_eq "$?" "1"
-  assert_contains "$out" "config already exists"
+  assert_contains "$out" "config:2"
 }
 
 # R39 (fix round 2 of Task 11): `project list`/`remove`/`default` and `repo list`/`remove`
@@ -336,6 +340,145 @@ test_broken_config_project_and_repo_commands_exit_3_with_message() {
 # gets created, and R39 must not break it.
 test_project_add_still_bootstraps_with_no_config_at_all() {
   assert_exit 0 wt project add me ~/src ~/wts
+}
+
+# R41 (fix round 3 of Task 11): config_load's classification of the config PATH, extended
+# past "parses badly" (R38) to "cannot be read at all" or "is not a file at all". Shapes
+# enumerated below; see the fix-round-3 report section for the full table including shapes
+# that already worked (absent, empty, valid, duplicate key/section, unparseable line --
+# covered by earlier tests in this file) and are not repeated here.
+
+# Shape: present but UNREADABLE (chmod 000). Finding 1 -- previously bypassed the recorder
+# entirely: `< "$WT_CONFIG_FILE"` failed at the shell level with its own raw diagnostic,
+# WT_CONFIG_LOAD_ERROR stayed empty, and `config get` fell through to "key not set" (the
+# coincidentally-right-exit-code trap R38 exists to prevent) while `list` blamed "no
+# [project] defined" instead of the real permission problem.
+test_unreadable_config_all_consumers() {
+  _broken_config  # reused only for its directory/file setup; overwritten below
+  write_config <<'EOF'
+kinds = a
+EOF
+  local cfg="$XDG_CONFIG_HOME/workytree/config"
+  chmod 000 "$cfg"
+  local errfile; errfile="$(mktemp)"
+  local out
+  out="$(wt __complete commands 2>"$errfile")"
+  assert_eq "$?" "0"; assert_contains "$out" "create"; assert_eq "$(cat "$errfile")" ""
+  out="$(wt __complete repos 2>"$errfile")"
+  assert_eq "$?" "0"; assert_eq "$out" ""; assert_eq "$(cat "$errfile")" ""
+  rm -f "$errfile"
+
+  out="$(wt config get kinds 2>&1)"
+  assert_eq "$?" "1"; assert_contains "$out" "not readable"
+
+  out="$(wt list 2>&1)"
+  assert_eq "$?" "3"; assert_contains "$out" "not readable"
+
+  assert_eq "$(wt config path)" "$cfg"
+  assert_exit 0 wt help
+  assert_contains "$(wt --version)" "workytree"
+
+  out="$(wt init x ~/a ~/b 2>&1)"
+  assert_eq "$?" "1"; assert_contains "$out" "not readable"
+
+  chmod 644 "$cfg"  # must be readable/deletable again before setup_env's teardown rm -rf
+}
+
+# Shape: a DIRECTORY sitting at the config path. Finding 2 -- previously `init` proceeded
+# past its own refusal (WT_CONFIG_EXISTS is file-existence-of-a-REGULAR-file, false for a
+# directory), `_config_write` touch-created into it (raw "is a directory" diagnostic) and
+# then `mv "$tmp" "$file"` SILENTLY SUCCEEDED (mv-into-a-directory is valid mv usage), so
+# `init` reported success while writing nothing and leaving a stray temp file behind.
+test_directory_at_config_path_all_consumers() {
+  local cfg="$XDG_CONFIG_HOME/workytree/config"
+  mkdir -p "$cfg"
+  local out
+
+  out="$(wt init x ~/a ~/b 2>&1)"
+  assert_eq "$?" "1"
+  assert_contains "$out" "not a regular file"
+  assert_eq "$(print -l -- "$cfg"/*(N))" ""  # no stray temp file left inside
+
+  local errfile; errfile="$(mktemp)"
+  out="$(wt __complete commands 2>"$errfile")"
+  assert_eq "$?" "0"; assert_contains "$out" "create"; assert_eq "$(cat "$errfile")" ""
+  out="$(wt __complete repos 2>"$errfile")"
+  assert_eq "$?" "0"; assert_eq "$out" ""; assert_eq "$(cat "$errfile")" ""
+  rm -f "$errfile"
+
+  out="$(wt config get kinds 2>&1)"
+  assert_eq "$?" "1"; assert_contains "$out" "not a regular file"
+
+  out="$(wt list 2>&1)"
+  assert_eq "$?" "3"; assert_contains "$out" "not a regular file"
+
+  assert_eq "$(wt config path)" "$cfg"
+
+  # `config edit` must still exec an editor rather than fail on workytree's OWN attempt to
+  # touch-create over the directory (R41: `-e`, not `-f`, guards that touch-create) --
+  # whatever the editor itself then does with a directory target is between it and the
+  # user, not a workytree-authored diagnostic.
+  out="$(EDITOR=cat wt config edit 2>&1)"
+  assert_contains "$out" "Is a directory"        # cat's own message: the editor was reached
+  [[ "$out" == *"cmd_config:"* ]] && { (( ++_fail )); print -u2 "  FAIL: workytree's own raw diagnostic leaked: $out"; } || (( ++_pass ))
+  assert_eq "$(print -l -- "$cfg"/*(N))" ""      # still no stray file created inside
+}
+
+# Shape: symlink to a VALID config -- must behave exactly like a normal file, and a write
+# (config_set) must go THROUGH the link (this file's own header comment) rather than
+# replacing it with a plain file.
+test_symlink_to_valid_config_works_and_writes_through() {
+  mkdir -p "$HOME/elsewhere" "$XDG_CONFIG_HOME/workytree"
+  cat > "$HOME/elsewhere/realconfig" <<'EOF'
+[project me]
+repo_root = ~/src
+worktree_root = ~/wts
+EOF
+  ln -s "$HOME/elsewhere/realconfig" "$XDG_CONFIG_HOME/workytree/config"
+  assert_eq "$(wt __complete projects)" "me"
+  assert_exit 0 wt config set default_project me
+  assert_contains "$(cat "$HOME/elsewhere/realconfig")" "default_project = me"
+  [[ -L "$XDG_CONFIG_HOME/workytree/config" ]] && (( ++_pass )) || { (( ++_fail )); print -u2 "  FAIL: symlink was replaced, not written through"; }
+}
+
+# Shape: symlink to a NONEXISTENT target (dangling). Treated the same as "absent" for
+# reading -- there is no partial/corrupt content sitting at either to diagnose -- so a
+# require_config command reports the ordinary "no config found" message (not a load-error),
+# and `project add`/`config set` can still create the config by writing THROUGH the link.
+test_dangling_symlink_treated_as_absent_and_writable_through() {
+  mkdir -p "$XDG_CONFIG_HOME/workytree"
+  ln -s "$HOME/does-not-exist-target" "$XDG_CONFIG_HOME/workytree/config"
+  local out; out="$(wt list 2>&1)"
+  assert_eq "$?" "3"
+  assert_contains "$out" "no config found"
+  assert_exit 0 wt project add me ~/src ~/wts
+  assert_contains "$(cat "$HOME/does-not-exist-target")" "[project me]"
+  [[ -L "$XDG_CONFIG_HOME/workytree/config" ]] && (( ++_pass )) || { (( ++_fail )); print -u2 "  FAIL: dangling symlink was replaced, not written through"; }
+}
+
+# Shape: config path whose PARENT directory does not exist yet. Already-correct behavior
+# (`mkdir -p "${file:h}"` in _config_write) -- pinned explicitly since R41 restructured the
+# write-target checks around it.
+test_config_write_creates_missing_parent_directories() {
+  export WORKYTREE_CONFIG="$HOME/nope/deeper/config"
+  assert_exit 0 wt project add me ~/src ~/wts
+  assert_contains "$(cat "$WORKYTREE_CONFIG")" "[project me]"
+}
+
+# _config_write's OWN refusal (R41), tested directly against the library function (no CLI
+# surface reaches it independently of an upstream guard today -- every current caller
+# already calls require_loadable_config/checks WT_CONFIG_LOAD_ERROR first, per R38/R39, so
+# a `wt` subprocess test alone would only prove the UPSTREAM guard, not this one). Same
+# in-process pattern this file's own header comment already establishes for
+# config_unset/config_remove_section. die()'s `exit` inside `$(...)` only unwinds that
+# command substitution's subshell, not this test process.
+test_config_write_itself_refuses_directory_target_leaves_no_temp_file() {
+  local dir="$XDG_CONFIG_HOME/workytree/config"
+  mkdir -p "$dir"
+  local out; out="$(config_set default_project x 2>&1)"
+  assert_eq "$?" "1"
+  assert_contains "$out" "not a regular file"
+  assert_eq "$(print -l -- "$dir"/*(N))" ""
 }
 
 run_tests

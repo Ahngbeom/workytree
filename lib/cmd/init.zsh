@@ -26,7 +26,22 @@
 # accepted tradeoff: a user now answers the alias question before the roots are validated,
 # so a validation retry re-asks it too -- harmless, since a retry loses no work either way.
 cmd_init() {
-  (( WT_CONFIG_EXISTS )) && die "config already exists: $WT_CONFIG_FILE -- add more with 'workytree project add' or edit with 'workytree config edit'"
+  # R41 (Finding 2): a directory (or any other non-regular-file occupant, or a regular
+  # file this process cannot read) sitting at the config path used to slip past this check
+  # entirely -- WT_CONFIG_EXISTS means "a loadable regular file is there" (unchanged, see
+  # lib/config.zsh), which is FALSE for a directory, so `init` proceeded, `_config_write`
+  # silently `mv`'d its temp file INTO the directory (valid mv usage, not a bug in mv), and
+  # `init` reported "added project x"/"config written" and exited 0 having written nothing.
+  # WT_CONFIG_LOAD_ERROR (set by config_load for exactly these "occupied but not a usable
+  # config" shapes, R38/R41) is the other half of "is this path safe to write a fresh
+  # config into" -- checked first so the user sees the SPECIFIC problem (not a regular
+  # file / not readable) rather than the generic "config already exists", which would be
+  # misleading here since no config, valid or otherwise, actually exists yet.
+  if [[ -n "$WT_CONFIG_LOAD_ERROR" ]]; then
+    die "$WT_CONFIG_LOAD_ERROR"
+  elif (( WT_CONFIG_EXISTS )); then
+    die "config already exists: $WT_CONFIG_FILE -- add more with 'workytree project add' or edit with 'workytree config edit'"
+  fi
   local name rr wr alias_wt=true
   if (( $# == 3 )); then
     name="$1" rr="$2" wr="$3"

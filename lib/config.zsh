@@ -87,7 +87,32 @@ config_load() {
   WT_CFG=() WT_PCFG=() WT_RCFG=() WT_PROJECTS=() WT_REPOS=()
   WT_CONFIG_EXISTS=0
   WT_CONFIG_LOAD_ERROR=""
-  [[ -f "$WT_CONFIG_FILE" ]] || return 0
+  # R41: classify the path BEFORE ever attempting to read it, rather than letting the read
+  # itself (`< "$WT_CONFIG_FILE"` below) fail at the shell level -- an open() failure there
+  # prints its own raw diagnostic ("config_load:N: permission denied: ...") straight to
+  # stderr, breaking the empty-stderr guarantee __complete depends on (R38), and never
+  # reaches _config_load_fail, so WT_CONFIG_LOAD_ERROR stays empty and every consumer built
+  # on top of it in R38/R39 falls through to the WRONG diagnosis (`config get` reports "key
+  # not set" instead of naming the real problem; `require_config` reports "no [project]
+  # defined" instead of the actual unreadable/non-file path). Finding 1, fix round 3.
+  #
+  # -e is false for BOTH a genuinely absent path and a symlink whose target doesn't exist
+  # (a "dangling" symlink) -- both are treated as absent, not a recorded failure: there is
+  # no partial/corrupt content sitting at either to diagnose, only nothing, exactly like a
+  # config file that was never created (and `config_set`/`_config_write` already know how
+  # to create one by writing through a symlink at that path). Anything else that occupies
+  # the path (following a live symlink to what it actually points at) but isn't a readable
+  # regular file -- a directory, a socket, a regular file this process cannot read -- is a
+  # recorded failure with its own clear message, never silence and never a raw diagnostic.
+  if [[ ! -e "$WT_CONFIG_FILE" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$WT_CONFIG_FILE" ]]; then
+    _config_load_fail "config path exists but is not a regular file: $WT_CONFIG_FILE"; return 1
+  fi
+  if [[ ! -r "$WT_CONFIG_FILE" ]]; then
+    _config_load_fail "config file exists but is not readable (check permissions): $WT_CONFIG_FILE"; return 1
+  fi
   WT_CONFIG_EXISTS=1
   local raw line lineno=0 sect_type="" sect_name="" key value
   local -A seen_keys
@@ -155,6 +180,20 @@ config_get() {
   esac
 }
 
+# _config_refuse_if_unwritable_target <file>: die (exit 1) if <file> EXISTS but isn't a
+# usable write target -- a regular file this process can write to. R41/Finding 2: without
+# this check, a DIRECTORY sitting at the config path let `_config_write` touch-create fail
+# loudly-but-harmlessly ("is a directory" on stderr) and then `mv "$tmp" "$file"` SILENTLY
+# SUCCEED anyway (mv-into-a-directory is valid mv usage, not a bug in mv) -- `cmd_init`
+# reported "added project x" / "config written" and exit 0 while writing nothing and
+# leaving a stray temp-named file inside the directory. Called BEFORE `mktemp` runs in
+# every caller below, so a refusal here never leaves a temp file behind to clean up.
+_config_refuse_if_unwritable_target() {
+  local file="$1"
+  [[ -e "$file" && ! -f "$file" ]] && die "config path exists but is not a regular file: $file"
+  [[ -e "$file" && ! -w "$file" ]] && die "config file exists but is not writable (check permissions): $file"
+}
+
 # _config_write <type> <name> <key> <value> <delete:0|1>
 # Rewrites the file line by line, replacing the key inside its section, appending the key
 # at the end of the section, or appending a new section. Comments and order are preserved.
@@ -164,6 +203,7 @@ _config_write() {
   local file tmp line cur_type="" cur_name="" in_target=0 seen_target=0 done=0
   file="$(config_file_path)"
   mkdir -p "${file:h}"
+  _config_refuse_if_unwritable_target "$file"
   [[ -f "$file" ]] || : > "$file"
   [[ -L "$file" ]] && file="${file:A}"
   tmp="$(mktemp "${file}.XXXXXX")"
@@ -202,7 +242,11 @@ config_remove_section() {
   setopt localoptions extendedglob
   local want_type="$1" want_name="$2" file tmp line skipping=0
   file="$(config_file_path)"
-  [[ -f "$file" ]] || return 0
+  # Nothing at all there -> nothing to remove, same no-op as always. Something there that
+  # ISN'T a usable regular file (a directory, unwritable) -> refuse loudly (R41) rather than
+  # silently no-op past it, the same choke point _config_write uses.
+  [[ -e "$file" ]] || return 0
+  _config_refuse_if_unwritable_target "$file"
   [[ -L "$file" ]] && file="${file:A}"
   tmp="$(mktemp "${file}.XXXXXX")"
   {
