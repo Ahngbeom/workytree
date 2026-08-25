@@ -310,4 +310,32 @@ test_broken_config_init_still_refuses() {
   assert_contains "$out" "config already exists"
 }
 
+# R39 (fix round 2 of Task 11): `project list`/`remove`/`default` and `repo list`/`remove`
+# read WT_PROJECTS/WT_PCFG/WT_CFG/WT_REPOS/WT_RCFG directly, calling neither require_config
+# nor (before this fix) any recorded-failure check -- against a broken config they fell
+# through to their own "no projects"/"no repos registered" empty-state messages, silently
+# telling the user their configuration was EMPTY when it was actually UNREADABLE. Exit code
+# 3 (not 1): a parse failure describes the state of the config FILE, the same category
+# require_config's own checks already use exit 3 for -- these commands are peers of the
+# require_config-gated commands (they query/mutate the same config-derived project/repo
+# universe), not peers of `config get`/`set` (whose exit 1 only preserves that ONE
+# subcommand's own pre-existing "key not found" exit code, per R38's own reasoning).
+test_broken_config_project_and_repo_commands_exit_3_with_message() {
+  _broken_config
+  local out
+  out="$(wt project list 2>&1)";      assert_eq "$?" "3"; assert_contains "$out" "config:2"
+  out="$(wt project remove x 2>&1)";  assert_eq "$?" "3"; assert_contains "$out" "config:2"
+  out="$(wt project default x 2>&1)"; assert_eq "$?" "3"; assert_contains "$out" "config:2"
+  out="$(wt repo list 2>&1)";         assert_eq "$?" "3"; assert_contains "$out" "config:2"
+  out="$(wt repo remove x 2>&1)";     assert_eq "$?" "3"; assert_contains "$out" "config:2"
+}
+
+# `project add` reaches the SAME require_loadable_config guard (it needs to read existing
+# WT_PROJECTS/WT_PCFG for its own dangling-default-project repair logic), but must still
+# work with NO config file at all -- that bootstrap case is exactly how the first config
+# gets created, and R39 must not break it.
+test_project_add_still_bootstraps_with_no_config_at_all() {
+  assert_exit 0 wt project add me ~/src ~/wts
+}
+
 run_tests

@@ -1,14 +1,24 @@
 # Repo/project resolution. Order: registered [repo] alias -> scan of every [project].repo_root -> cwd inference.
 
+# require_loadable_config: exit 3 if config_load (lib/config.zsh) recorded a parse failure
+# (R38/R39) in WT_CONFIG_LOAD_ERROR, with the same message config_load would have died with.
+# Unlike require_config below, this does NOT also require a config file to exist or any
+# [project] to be defined -- callers that legitimately run with no config file at all
+# (`project add`'s bootstrap case is exactly how the FIRST config gets created) still call
+# this: a config file that EXISTS but failed to PARSE must never be silently treated the same
+# as "no config file" -- only "no config file" is allowed to look empty. Exit code 3 (not 1)
+# because a parse failure describes the state of the config FILE, the same category
+# require_config's own checks already use exit 3 for (R31, see lib/cmd/project.zsh) --
+# `cmd_project`/`cmd_repo` are peers of the require_config-gated commands (create/remove/
+# prune/list/path/repos/repo-add) in that they all query/mutate the SAME config-derived
+# project/repo universe, not peers of `config get`/`set` (which kept exit 1 in R38 only to
+# stay consistent with that ONE subcommand's own pre-existing "key not found" exit code).
+require_loadable_config() {
+  [[ -n "$WT_CONFIG_LOAD_ERROR" ]] && { error "$WT_CONFIG_LOAD_ERROR"; exit 3; }
+}
+
 require_config() {
-  # R38: a config file that exists but failed to PARSE (config_load recorded
-  # WT_CONFIG_LOAD_ERROR instead of dying, so __complete/config-path/config-edit can still
-  # run) is a harder failure than "no config" or "no [project]" below -- surface the parse
-  # failure itself, with the same message config_load would have died with, at the same
-  # exit code (3) this function already uses to describe "the config file is unusable".
-  if [[ -n "$WT_CONFIG_LOAD_ERROR" ]]; then
-    error "$WT_CONFIG_LOAD_ERROR"; exit 3
-  fi
+  require_loadable_config
   if (( !WT_CONFIG_EXISTS )); then
     error "no config found at $WT_CONFIG_FILE"; error "run 'workytree init' to create one"; exit 3
   fi

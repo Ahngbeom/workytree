@@ -2,7 +2,15 @@
 # outside any project's repo_root. Each one borrows its worktree_root from the project it
 # names, so unlike `project add`, `repo add` NEEDS an existing project to attach to and does
 # call require_config (the reverse of cmd_project's asymmetry -- see the note there).
+#
+# R39: require_loadable_config here (not the full require_config) covers `list`/`remove`,
+# which read WT_REPOS/WT_RCFG directly and call neither require_config nor anything else --
+# without it, a config that failed to PARSE would silently look like "no repos registered"
+# instead of the unreadable-config error it actually is. `add` already calls the full
+# require_config a few lines into its own branch below; this call is redundant-but-harmless
+# there (same WT_CONFIG_LOAD_ERROR, same exit 3), not a second, divergent check.
 cmd_repo() {
+  require_loadable_config
   local sub="${1:-list}"; (( $# )) && shift
   case "$sub" in
     list)

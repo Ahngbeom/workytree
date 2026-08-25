@@ -15,12 +15,18 @@ _wt_project_add_check_root() {
   esac
 }
 
-# cmd_project: manage [project] sections. Deliberately does NOT call require_config -- there
-# may be no config file yet at all, and `project add` is exactly how the first one gets
-# created. (`repo add`, by contrast, needs an existing project to attach to and does call
-# require_config -- see lib/cmd/repo.zsh.)
+# cmd_project: manage [project] sections. Deliberately does NOT call the FULL require_config
+# -- there may be no config file yet at all, and `project add` is exactly how the first one
+# gets created. It DOES call require_loadable_config (R39): every branch below reads
+# WT_PROJECTS/WT_PCFG/WT_CFG/WT_REPOS/WT_RCFG directly, and without this a config that failed
+# to PARSE (not one that's merely absent or empty) would silently look identical to "zero
+# projects" -- telling the user their configuration is empty when it is actually unreadable,
+# exactly the "worse than dying" failure R38 was written to prevent, just for a consumer R38
+# didn't cover. (`repo add`, by contrast, needs an existing project to attach to and does call
+# the full require_config -- see lib/cmd/repo.zsh.)
 cmd_project() {
   setopt localoptions extendedglob
+  require_loadable_config
   local sub="${1:-list}"; (( $# )) && shift
   case "$sub" in
     list)

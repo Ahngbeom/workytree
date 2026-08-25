@@ -7,6 +7,21 @@
 
 _workytree_src() { workytree __complete "$@" 2>/dev/null; }
 
+# _workytree_values <label> <__complete-args...>: R40 -- a brand-new user with nothing
+# registered yet (no repos, no projects, no kinds on disk) hits every dynamic completion
+# position with ZERO candidates. Calling `_values <label>` with no values after it is a
+# zsh completion-system usage error ("_values:compvalues:11: not enough arguments"), and
+# that message leaks straight into the terminal -- exactly the TAB-time noise this task
+# exists to prevent, and worse for the exact audience least equipped to make sense of it.
+# Compute the candidate array first and only call `_values` when it's non-empty; on empty,
+# do nothing -- a silent "nothing to offer" is the correct behavior a Tab press with no
+# candidates.
+_workytree_values() {
+  local label="$1"; shift
+  local -a cands; cands=( ${(f)"$(_workytree_src "$@")"} )
+  (( ${#cands} )) && _values "$label" "${cands[@]}"
+}
+
 _workytree() {
   local -a cmds
   cmds=( ${(f)"$(_workytree_src commands)"} )
@@ -18,7 +33,7 @@ _workytree() {
     '--no-color[disable colors]' \
     '1:command:->cmd' '*::arg:->args' && return
   case "$state" in
-    projects) _values project ${(f)"$(_workytree_src projects)"}; return ;;
+    projects) _workytree_values project projects; return ;;
     cmd) _describe -t commands 'workytree command' cmds; return ;;
   esac
   # R7: with '1:command:->cmd' '*::arg:->args', _arguments -C rebases $words/$CURRENT for
@@ -36,16 +51,16 @@ _workytree() {
   case "$sub" in
     create|remove|path|cd|list|prune)
       case $idx in
-        1) _values repo ${(f)"$(_workytree_src repos)"} ;;
-        2) [[ $sub == list || $sub == prune ]] || _values kind ${(f)"$(_workytree_src kinds "${words[2]}")"} ;;
-        3) [[ $sub == list || $sub == prune ]] || _values ticket ${(f)"$(_workytree_src tickets "${words[2]}" "${words[3]}")"} ;;
-        4) [[ $sub == create ]] && _values base ${(f)"$(_workytree_src branches "${words[2]}")"} ;;
+        1) _workytree_values repo repos ;;
+        2) [[ $sub == list || $sub == prune ]] || _workytree_values kind kinds "${words[2]}" ;;
+        3) [[ $sub == list || $sub == prune ]] || _workytree_values ticket tickets "${words[2]}" "${words[3]}" ;;
+        4) [[ $sub == create ]] && _workytree_values base branches "${words[2]}" ;;
       esac
       # remove's flags may appear anywhere among its positionals (lib/cmd/remove.zsh), so
       # offer them at every position for `remove` rather than gating on $idx.
       [[ $sub == remove ]] && _values -w flag --force --branch -b --branch-force -B
       ;;
-    project) (( idx == 1 )) && _values sub list add remove default || _values project ${(f)"$(_workytree_src projects)"} ;;
+    project) (( idx == 1 )) && _values sub list add remove default || _workytree_values project projects ;;
     repo)    (( idx == 1 )) && _values sub list add remove || _files -/ ;;
     config)  (( idx == 1 )) && _values sub path get set edit ;;
   esac
