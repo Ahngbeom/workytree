@@ -12,19 +12,23 @@ remove_branch() {
 
 # cmd_remove <repo> <kind> <ticket> [--force] [-b|--branch] [-B|--branch-force]
 # Flags may appear anywhere among the arguments, interleaved with the positionals; any
-# other dash-prefixed argument is a usage error. Exactly 3 non-flag arguments are required.
+# other dash-prefixed argument is a usage error. A literal `--` ends option parsing, so a
+# repo/kind/ticket value that happens to start with `-` is still reachable. Exactly 3
+# non-flag arguments are required.
 cmd_remove() {
   require_config
   local -a pos
-  local -i force_remove=0 delete_branch=0 force_branch=0
+  local -i force_remove=0 delete_branch=0 force_branch=0 saw_dashdash=0
   local arg
   for arg in "$@"; do
+    if (( saw_dashdash )); then pos+=("$arg"); continue; fi
     case "$arg" in
-      --force)           force_remove=1 ;;
-      --branch|-b)       delete_branch=1 ;;
-      --branch-force|-B) delete_branch=1; force_branch=1 ;;
-      -*)                usage_error "unknown flag: $arg" ;;
-      *)                 pos+=("$arg") ;;
+      --)                 saw_dashdash=1 ;;
+      --force)            force_remove=1 ;;
+      --branch|-b)        delete_branch=1 ;;
+      --branch-force|-B)  delete_branch=1; force_branch=1 ;;
+      -*)                 usage_error "unknown flag: $arg" ;;
+      *)                  pos+=("$arg") ;;
     esac
   done
   (( ${#pos} == 3 )) || usage_error "usage: workytree remove <repo> <kind> <ticket> [--force] [-b|--branch] [-B|--branch-force]"
@@ -42,12 +46,30 @@ cmd_remove() {
   info "removing worktree"; print -r -- "  path: $target"; [[ -n "$branch" ]] && print -r -- "  branch: $branch"
   git -C "$target" status --short --branch | sed 's/^/  /'
 
+  # A single probe decides everything below (_worktree_dirt_kind). Calling
+  # has_non_idea_changes and then is_dirty_worktree separately would each run their own
+  # `git status`, and a SECOND probe could fail independently of the first: if that happened
+  # here, a probe failure reaching the idea-only branch would get silently discarded as
+  # "just .idea/ dirt" without --force -- exactly the false-accept this function exists to
+  # prevent.
+  # Named dirt_kind, NOT kind: `kind` is already a local holding the ticket's kind (e.g.
+  # "fix") from line 35 above. Reusing that name here for the dirt-classification result
+  # once caused a genuine zsh quirk: re-declaring an already-local, already-assigned
+  # variable with a bare `local kind` (no `=`) makes zsh PRINT "kind=fix" to stdout instead
+  # of silently shadowing it -- caught by inspecting real command output during
+  # verification, not by any test.
+  local dirt_kind
+  _worktree_dirt_kind "$target"; dirt_kind="$REPLY"
+
   local -i idea_only=0
-  if has_non_idea_changes "$target" || has_dirty_submodule "$target"; then
+  if [[ "$dirt_kind" == unknown ]]; then
+    (( force_remove )) || die "could not verify worktree status ($WT_DIRT_DETAIL); refusing without --force"
+    warn "worktree status could not be verified ($WT_DIRT_DETAIL); proceeding only because --force was given"
+  elif [[ "$dirt_kind" == real ]] || has_dirty_submodule "$target"; then
     (( force_remove )) || die "worktree has changes outside .idea/ (or a dirty submodule); use --force to remove"
-  elif is_dirty_worktree "$target"; then
+  elif [[ "$dirt_kind" == idea-only ]]; then
     idea_only=1
-    warn "worktree only has IDE state under .idea/ — discarding it:"; worktree_status "$target" | sed 's/^/  /'
+    warn "worktree only has IDE state under .idea/ — discarding it:"; print -r -- "$WT_DIRT_DETAIL" | sed 's/^/  /'
   fi
   if (( force_remove || idea_only )) || has_initialized_submodules "$target"; then
     git -C "$repo_path" worktree remove --force "$target" || die "failed to remove worktree"
