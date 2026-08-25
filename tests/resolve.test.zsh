@@ -63,6 +63,36 @@ test_ambiguous_name_needs_project() {
   assert_eq "$(wt path server --project me)" "$HOME/me/src/server"
 }
 
+# R53: two repos sharing a basename WITHIN one project is a different problem than two repos
+# sharing a basename ACROSS projects (test_ambiguous_name_needs_project, above) -- --project
+# cannot disambiguate candidates that already all belong to the same project, so the message
+# (and the fix it points at) must differ. Reproduced: src/alpha/api and src/beta/api both
+# scanned under project "me".
+test_intra_project_ambiguous_name_points_at_repo_add_name() {
+  # Deliberately NOT `fixture` -- its [repo api] registration would win via resolve_repo's own
+  # "a registered alias always wins over anything scanned" precedence and never reach the
+  # ambiguous-scan branch this test targets. A plain project with two same-basename repos
+  # scanned underneath it, and nothing registered, is what actually reproduces R53.
+  make_repo "$HOME/me/src/alpha/api"
+  make_repo "$HOME/me/src/beta/api"
+  write_config <<EOF
+[project me]
+repo_root = ~/me/src
+worktree_root = ~/me/wts
+EOF
+  local out; out="$(wt path api 2>&1)"
+  assert_eq "$?" 1
+  assert_contains "$out" "ambiguous within project 'me'"
+  assert_contains "$out" "repo add"
+  assert_contains "$out" "--name"
+  # --project cannot fix this -- both candidates are already in project "me" -- so the SAME
+  # diagnosis must reappear, not the cross-project "narrow it with --project" wording.
+  local out2; out2="$(wt path api --project me 2>&1)"
+  assert_eq "$?" 1
+  assert_contains "$out2" "ambiguous within project 'me'"
+  assert_eq "${out//across projects/}" "$out" "must not use the cross-project wording"
+}
+
 test_unknown_repo_and_project() {
   fixture
   assert_exit 1 wt path nope
@@ -81,6 +111,18 @@ test_list_shows_worktrees() {
   fixture
   assert_contains "$(wt list server)" "$HOME/fd/products/acme/backend/server"
   assert_contains "$(wt list)" "repo: blog"
+}
+
+# Coherence: `repos` and `list [repo]` used to silently ignore extra positional arguments and
+# exit 0, unlike every other command (create/remove/prune/path/...), which usage_errors on
+# wrong arity. `repos` takes none; `list` takes at most one.
+test_repos_and_list_reject_extra_args() {
+  fixture
+  assert_exit 2 wt repos junk
+  assert_exit 2 wt repos junk args
+  assert_contains "$(wt repos junk 2>&1)" "usage: workytree repos"
+  assert_exit 2 wt list api extra
+  assert_contains "$(wt list api extra 2>&1)" "usage: workytree list"
 }
 
 # Two projects whose repo_roots overlap: outer's repo_root contains inner's repo_root, and

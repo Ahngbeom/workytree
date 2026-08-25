@@ -3,9 +3,10 @@
 # directory. bin/workytree is a pure CLI (computes, prints, never cd's); for `create`/`cd`
 # the LAST stdout line is the resulting path (see bin/workytree's header comment) — this
 # wrapper captures stdout, replays everything except that last line, and `builtin cd`s to it
-# when running interactively. :A resolves a symlink (the installer creates ~/.local/bin/wt*
-# as a symlink, or sources this file through one), so WORKYTREE_ROOT still lands on the real
-# install directory rather than the symlink's own parent.
+# when running interactively. :A resolves a symlink (the installer creates
+# ~/.local/bin/workytree as a symlink to bin/workytree; `wt` itself is never a symlink, only
+# the function this file defines below), so WORKYTREE_ROOT still lands on the real install
+# directory rather than the symlink's own parent.
 typeset -g WORKYTREE_ROOT="${${(%):-%x}:A:h:h}"
 typeset -g WORKYTREE_BIN="$WORKYTREE_ROOT/bin/workytree"
 

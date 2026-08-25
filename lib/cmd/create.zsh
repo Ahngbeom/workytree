@@ -22,18 +22,43 @@ _wt_worktree_is_registered() {
   (( found ))
 }
 
+# wt_branch_name <kind> <ticket>: the one place "$kind/$ticket" is joined into a branch name.
+# Coherence cleanup: this used to be reconstructed independently in three spots below (the
+# show-ref probe, the confirmation summary, and create_do's own copy) -- three separate copies
+# of the same join that could silently drift apart. Every caller now routes through here.
+wt_branch_name() { print -r -- "$1/$2"; }
+
 # create_pick_repo: interactive project -> repo selection. Sets project, repo, repo_path in
 # the CALLER's scope (cmd_create's locals) -- deliberately not `local` here.
+#
+# R53: labels, not bare names, are offered to the picker. Two repos sharing a basename within
+# the SAME project (e.g. src/alpha/api and src/beta/api) used to show as two IDENTICAL "api"
+# entries -- indistinguishable on screen, and picking either one re-resolved by NAME via
+# resolve_repo, which fails with the same intra-project ambiguity error either way. Instead,
+# every row from all_repos is kept (name + path), a row's label is disambiguated with its path
+# whenever its name is not unique among this project's repos, and the chosen label is mapped
+# straight back to ITS OWN row's repo_path -- never re-resolved by name -- so picking either
+# duplicate actually succeeds.
 create_pick_repo() {
-  local -a names
+  local -a rows labels
   if [[ -n "$WT_PROJECT_OPT" ]]; then project="$WT_PROJECT_OPT"
   elif (( ${#WT_PROJECTS} > 1 )); then prompt_choose "project" 0 "${WT_PROJECTS[@]}"; project="$REPLY"
   else project="${WT_PROJECTS[1]}"; fi
-  names=( ${(f)"$(all_repos "$project" | cut -f1)"} )
-  (( ${#names} )) || die "no repos found under project '$project' ($(project_repo_root "$project"))"
-  prompt_choose "repo" 0 "${names[@]}"; repo="$REPLY"
-  local r; r="$(resolve_repo "$repo" "$project")" || exit $?
-  repo_path="${r#*$'\t'}"
+  rows=( ${(f)"$(all_repos "$project")"} )
+  (( ${#rows} )) || die "no repos found under project '$project' ($(project_repo_root "$project"))"
+  local row n rp
+  local -A name_count
+  for row in "${rows[@]}"; do name_count[${row%%$'\t'*}]=$(( ${name_count[${row%%$'\t'*}]:-0} + 1 )) ; done
+  for row in "${rows[@]}"; do
+    n="${row%%$'\t'*}"; rp="${row##*$'\t'}"
+    (( name_count[$n] > 1 )) && labels+=("$n ($rp)") || labels+=("$n")
+  done
+  prompt_choose "repo" 0 "${labels[@]}"
+  local -i sel_idx=${labels[(Ie)$REPLY]}
+  (( sel_idx )) || die "internal error: could not match the chosen repo"
+  row="${rows[$sel_idx]}"
+  repo="${row%%$'\t'*}"
+  repo_path="${row##*$'\t'}"
 }
 
 # create_do <project> <repo> <repo_path> <kind> <ticket> <base_ref> [base_label]
@@ -45,7 +70,7 @@ create_do() {
   local project="$1" repo="$2" repo_path="$3" kind="$4" ticket="$5" base_ref="$6" base_label="${7:-$6}"
   local target branch
   target="$(worktree_path "$project" "$repo" "$kind" "$ticket")"
-  branch="$kind/$ticket"
+  branch="$(wt_branch_name "$kind" "$ticket")"
   info "source repo: $repo_path"
   info "target path: $target"
   info "branch name: $branch"
@@ -107,7 +132,7 @@ cmd_create() {
   local target; target="$(worktree_path "$project" "$repo" "$kind" "$ticket")"
   # base_ref/base_label split: see the note on create_do (R22).
   local base_ref="$base" base_label="$base"
-  if [[ -z "$base_ref" && ! -e "$target" ]] && ! git -C "$repo_path" show-ref --verify --quiet "refs/heads/$kind/$ticket"; then
+  if [[ -z "$base_ref" && ! -e "$target" ]] && ! git -C "$repo_path" show-ref --verify --quiet "refs/heads/$(wt_branch_name "$kind" "$ticket")"; then
     local auto; auto="$(default_base_ref "$repo_path")" || exit $?
     if prompt_available; then prompt_input "base branch" "$auto"; base_ref="$REPLY"; else base_ref="$auto"; fi
     base_label="$base_ref"
@@ -118,7 +143,7 @@ cmd_create() {
     dim "──────────────────────────────" >&2
     print -u2 -r -- "repo:    $repo → $repo_path"
     print -u2 -r -- "target:  $target"
-    print -u2 -r -- "branch:  $kind/$ticket${base_label:+  (base: $base_label)}"
+    print -u2 -r -- "branch:  $(wt_branch_name "$kind" "$ticket")${base_label:+  (base: $base_label)}"
     prompt_confirm "Create?" y || exit 130
   fi
   create_do "$project" "$repo" "$repo_path" "$kind" "$ticket" "$base_ref" "$base_label"

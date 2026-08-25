@@ -61,12 +61,12 @@ cmd_remove() {
   info "removing worktree"; print -r -- "  path: $target"; [[ -n "$branch" ]] && print -r -- "  branch: $branch"
   git -C "$target" status --short --branch | sed 's/^/  /'
 
-  # A single probe decides everything below (_worktree_dirt_kind). Calling
-  # has_non_idea_changes and then is_dirty_worktree separately would each run their own
-  # `git status`, and a SECOND probe could fail independently of the first: if that happened
-  # here, a probe failure reaching the idea-only branch would get silently discarded as
-  # "just .idea/ dirt" without --force -- exactly the false-accept this function exists to
-  # prevent.
+  # A single probe decides everything below (_worktree_dirt_kind). Calling it twice under two
+  # different names for two different questions ("is it dirty" / "is any of that dirt outside
+  # .idea/") would each run their own `git status`, and a SECOND probe could fail independently
+  # of the first: if that happened here, a probe failure reaching the idea-only branch would
+  # get silently discarded as "just .idea/ dirt" without --force -- exactly the false-accept
+  # this function exists to prevent.
   # Named dirt_kind, NOT kind: `kind` is already a local holding the ticket's kind (e.g.
   # "fix") from line 35 above. Reusing that name here for the dirt-classification result
   # once caused a genuine zsh quirk: re-declaring an already-local, already-assigned

@@ -1,8 +1,8 @@
 #!/bin/sh
-# workytree installer. Usage: curl -fsSL <raw-url>/install.sh | sh   (or: sh install.sh from a checkout)
+# workytree installer. Usage: curl -fsSL <raw-url>/install.sh | sh
+#   or, from a checkout you already have (e.g. `git clone` it yourself first): sh install.sh
 set -eu
 REPO_URL="${WORKYTREE_REPO_URL:-https://github.com/Ahngbeom/workytree.git}"
-INSTALL_DIR="${WORKYTREE_INSTALL_DIR:-$HOME/.local/share/workytree}"
 BIN_DIR="${WORKYTREE_BIN_DIR:-$HOME/.local/bin}"
 ZSHRC="${ZDOTDIR:-$HOME}/.zshrc"
 
@@ -13,8 +13,32 @@ ZSHRC="${ZDOTDIR:-$HOME}/.zshrc"
 # `|| die "..."` or an explicit `if ! ...; then ...; die ...; fi`.
 die() { echo "workytree: $*" >&2; exit 1; }
 
+# R50: resolve the directory this script itself lives in, so a `sh install.sh` run from
+# inside a workytree checkout can use THAT checkout as the install source instead of
+# cloning REPO_URL -- which, until the repository is published, cannot be cloned at all.
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || die "could not resolve the directory containing this script"
+
+# FROM_CHECKOUT is true only when WORKYTREE_INSTALL_DIR was NOT given (an explicit override
+# always wins, unchanged) AND the script's own directory actually looks like a workytree
+# checkout -- not merely "has a .git dir" (a bare repo, a submodule stub, or someone's
+# unrelated dotfiles repo could have one), but the real layout this checkout ships:
+# bin/workytree, lib/, and shell/ sitting right next to install.sh.
+FROM_CHECKOUT=0
+if [ -z "${WORKYTREE_INSTALL_DIR:-}" ] && [ -x "$SCRIPT_DIR/bin/workytree" ] && [ -d "$SCRIPT_DIR/lib" ] && [ -d "$SCRIPT_DIR/shell" ]; then
+  INSTALL_DIR="$SCRIPT_DIR"
+  FROM_CHECKOUT=1
+else
+  INSTALL_DIR="${WORKYTREE_INSTALL_DIR:-$HOME/.local/share/workytree}"
+fi
+
 if [ -x "$INSTALL_DIR/bin/workytree" ]; then
-  if [ -d "$INSTALL_DIR/.git" ] && [ -z "${WORKYTREE_INSTALL_DIR:-}" ]; then
+  # The git-pull auto-update path only applies to the DEFAULT clone location
+  # ($HOME/.local/share/workytree) -- never to a checkout install.sh is running from
+  # in-place (FROM_CHECKOUT), and never when WORKYTREE_INSTALL_DIR pinned a specific
+  # directory: "install from this checkout" means "use it as-is", not "auto-update the
+  # directory I was invoked from" (which could have no upstream configured, local commits
+  # in progress, or simply not be something this installer should be mutating for you).
+  if [ "$FROM_CHECKOUT" -eq 0 ] && [ -d "$INSTALL_DIR/.git" ] && [ -z "${WORKYTREE_INSTALL_DIR:-}" ]; then
     echo "workytree: updating $INSTALL_DIR"
     # R46: a failed --ff-only pull (local modifications, diverged history, ...) must never
     # be swallowed -- continuing past it would run the rest of this script (symlink, .zshrc)

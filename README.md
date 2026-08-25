@@ -6,14 +6,32 @@ Git worktree manager with project-scoped roots and an interactive `create`.
 
 ## Install (zsh)
 
+Clone this repository yourself, then run the installer from the checkout:
+
+    git clone <this-repository-url> workytree
+    cd workytree
+    sh install.sh
+    exec zsh
+    workytree init
+
+`sh install.sh`, run from inside a checkout (as above), detects that it's running from one
+(`bin/workytree`, `lib/`, and `shell/` sitting next to `install.sh`) and installs straight from
+it — no network access and no `WORKYTREE_INSTALL_DIR` needed. It symlinks
+`~/.local/bin/workytree` onto the checkout and adds one `source` line to `~/.zshrc` — backing
+the file up first (`.zshrc.bak-<timestamp>`) and never adding the line twice. It is safe to
+re-run.
+
+The one-liner below is the eventual intended install path once this repository is published
+somewhere `git clone`/`curl` can reach — **it does not work yet**, since nothing is published
+at that URL today:
+
     curl -fsSL https://raw.githubusercontent.com/Ahngbeom/workytree/main/install.sh | sh
     exec zsh
     workytree init
 
-`install.sh` clones (or, on a repeat run against the same install directory, updates) into
-`~/.local/share/workytree`, symlinks `~/.local/bin/workytree` onto it, and adds one `source`
-line to `~/.zshrc` — backing the file up first (`.zshrc.bak-<timestamp>`) and never adding the
-line twice. It is safe to re-run.
+Once published, running it against an already-installed copy at the default location
+(`~/.local/share/workytree`) updates that copy in place (`git pull --ff-only`) rather than
+re-cloning.
 
 Tested with zsh 5.9 and git 2.50.1. `fzf` is used for the `create` picker screens when it is
 on your `PATH`; without it, `create` falls back to a numbered-menu prompt.
@@ -23,6 +41,13 @@ on your `PATH`; without it, `create` falls back to a numbered-menu prompt.
 A **project** pairs a `repo_root` (a directory scanned recursively, up to `scan_depth` levels
 deep, default 3) with a `worktree_root`. Worktrees are created at
 `<worktree_root>/<repo>/<kind>/<ticket>` on branch `<kind>/<ticket>`.
+
+**`scan_depth` has a hard, silent cutoff.** A repo nested deeper than `scan_depth` levels
+below `repo_root` is not found by `repos`, `path`, or `create` — and nothing tells you it was
+skipped; it simply never appears, the same as if it didn't exist. The default (3) means a repo
+at `repo_root/a/b/c` is found but one at `repo_root/a/b/c/d` is not. If your own layout nests
+repos deeper than that, raise `scan_depth` for that project explicitly (`scan_depth = 5`, or
+whatever your deepest repo needs) or register the deep repo directly with `workytree repo add`.
 
     ~/.config/workytree/config
     ─────────────────────────
@@ -54,7 +79,10 @@ deep, default 3) with a `worktree_root`. Worktrees are created at
     wt config get|set|edit|path
 
 Repo names are resolved in order: registered `[repo]` alias → scan of every project's
-`repo_root` → current directory. Ambiguous names across projects need `--project <name>`.
+`repo_root` → current directory. Ambiguous names across projects need `--project <name>`; two
+repos sharing a basename *within the same project* can't be disambiguated with `--project` (they're
+already in it) — register the one you want under a distinct alias with `workytree repo add
+<path> --name <alias>` instead.
 `--project`, `--yes`/`-y`, and `--no-color` are global options and are accepted in any
 position on the command line.
 
@@ -77,6 +105,14 @@ more consistent with the table above.
 These were found during development and deliberately left as-is; you will hit one of them
 before you hit a bug.
 
+- **`remove` deletes gitignored files without warning.** `remove` decides whether a worktree
+  is safe to delete by asking git (`git status`) whether it's dirty. Anything gitignored —
+  `.env`, `node_modules`, build output — is invisible to `git status` by definition, so a
+  worktree holding nothing but gitignored files reads as perfectly clean and `remove` deletes
+  it outright: exit 0, no `--force` needed, no confirmation, no mention of what was inside.
+  This matches `git worktree remove`'s own behavior and is not a bug workytree fixes — but a
+  `.env` that exists nowhere else is gone the moment you run `remove`. Back up anything
+  gitignored you care about before removing a worktree.
 - **Bare repos are not discovered.** The `repo_root` scan looks for a `.git` entry (file or
   directory) one level inside each candidate directory, so a bare repo (e.g. `project.git`,
   which has no `.git` of its own) is silently absent from `repos`, `path`, and every other

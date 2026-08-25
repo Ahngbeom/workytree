@@ -70,6 +70,27 @@ test_declining_inferred_repo_opens_picker() {
   assert_dir "$HOME/wts/app/feature/P1"
 }
 
+# R53: two repos sharing a basename within the SAME project used to appear as two IDENTICAL
+# "api" entries in the picker -- indistinguishable, and picking either re-resolved by name and
+# failed with the same intra-project ambiguity error either way. Now each is labeled with its
+# path and the choice is honored directly (no re-resolution by name): picking the SECOND "api"
+# entry must create the worktree against the SECOND repo (beta), not silently fall back to the
+# first (alpha) or fail.
+test_picker_disambiguates_duplicate_basenames() {
+  fixture
+  make_repo "$HOME/src/alpha/api"
+  make_repo "$HOME/src/beta/api"
+  # --project me skips the project-selection question; the repo picker then lists (sorted)
+  # "api" (alpha), "api" (beta), "app", "lib" -- answer "2" to pick the beta one.
+  answers "2" "1" "T1" "" ""
+  wt create --project me >/dev/null 2>&1
+  assert_eq "$?" 0
+  assert_dir "$HOME/wts/api/feature/T1"
+  local common; common="$(git -C "$HOME/wts/api/feature/T1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+  assert_contains "$common" "/src/beta/api/"
+  assert_eq "${common//\/src\/alpha\/api\//}" "$common" "must not have resolved to the alpha repo"
+}
+
 test_eof_cancels_without_side_effects() {
   fixture; answers "1"
   assert_exit 130 wt create

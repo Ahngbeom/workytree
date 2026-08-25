@@ -256,9 +256,24 @@ resolve_repo() {
   case ${#matches} in
     0) error "repo not found: $name (run 'workytree repos')"; exit 1 ;;
     1) print -r -- "${matches[1]}" ;;
-    *) error "repo name '$name' is ambiguous across projects; narrow it with --project <name>:"
-       for line in "${matches[@]}"; do print -u2 -r -- "  ${line%%$'\t'*}"$'\t'"${line#*$'\t'}"; done
-       exit 1 ;;
+    *)
+      # R53: "narrow it with --project" is only actionable advice when the candidates
+      # actually belong to DIFFERENT projects. Reproduced: two repos both basenamed "api"
+      # under the SAME project (e.g. src/alpha/api and src/beta/api) hit this branch too --
+      # every candidate already shares one project, so --project <that-project> reproduces
+      # the identical ambiguity error rather than resolving it. Detect that case (every
+      # match's project field is the same) and point the user at the one thing that
+      # actually fixes it: registering one of the collisions under a distinct alias.
+      local -A proj_seen; local proj
+      for line in "${matches[@]}"; do proj_seen[${line%%$'\t'*}]=1; done
+      if (( ${#proj_seen} == 1 )); then
+        proj="${matches[1]%%$'\t'*}"
+        error "repo name '$name' is ambiguous within project '$proj' (multiple repos share the basename '$name'); --project cannot disambiguate this -- register the one you want under a distinct alias: workytree repo add <path> --name <alias>:"
+      else
+        error "repo name '$name' is ambiguous across projects; narrow it with --project <name>:"
+      fi
+      for line in "${matches[@]}"; do print -u2 -r -- "  ${line%%$'\t'*}"$'\t'"${line#*$'\t'}"; done
+      exit 1 ;;
   esac
 }
 

@@ -1,12 +1,6 @@
 # Worktree-inspection helpers. Shared by `remove` (Task 6) and `prune` (Task 7) — kept out
 # of lib/cmd/remove.zsh so prune never has to source a sibling command module (R4).
 
-# worktree_status <path>: porcelain listing, for DISPLAY only (cmd_remove prints it to the
-# user before/while acting). Fails OPEN on a git error (empty output looks identical to
-# "clean") -- never use this for a safety decision. Safety code below runs its own probe via
-# _worktree_dirt_kind, which fails CLOSED (R24).
-worktree_status() { git -C "$1" status --porcelain --untracked-files=normal 2>/dev/null; }
-
 # _worktree_dirt_kind <path>: single source of truth for how dirty a worktree is w.r.t. the
 # .idea/-is-discardable rule. Runs `git status --porcelain` exactly ONCE -- a second,
 # independent probe moments later could observe different reality (e.g. permissions
@@ -71,14 +65,6 @@ _worktree_dirt_kind() {
   done <<< "$out"
   REPLY=idea-only
 }
-
-# is_dirty_worktree <path>: true if dirty, OR if that can't be determined (R24 fail-closed).
-is_dirty_worktree() { _worktree_dirt_kind "$1"; [[ "$REPLY" != clean ]]; }
-
-# has_non_idea_changes <path>: true if any dirty entry lies outside .idea/ (real work to
-# protect), OR if the inspection itself could not be trusted (R24 fail-closed) -- either
-# way the caller must refuse without --force.
-has_non_idea_changes() { _worktree_dirt_kind "$1"; [[ "$REPLY" == real || "$REPLY" == unknown ]]; }
 
 # has_dirty_submodule <path>: true if any submodule (recursively) has its own uncommitted
 # changes, OR if that can't be determined. `git submodule foreach` runs the probe once per

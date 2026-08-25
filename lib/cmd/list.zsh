@@ -1,5 +1,6 @@
 cmd_list() {
   require_config
+  (( $# <= 1 )) || usage_error "usage: workytree list [repo]"
   local r repo_path n p
   if (( $# == 1 )); then
     r="$(resolve_repo "$1")" || exit $?

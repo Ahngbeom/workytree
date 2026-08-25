@@ -64,7 +64,8 @@ test_remove_dirty_submodule_requires_force() {
   fixture_submodule
   print x > "$WT/sub/newfile.txt"
   # Sanity: confirm the superproject's own status is blind to this dirtiness -- otherwise
-  # this test would pass via has_non_idea_changes instead of exercising has_dirty_submodule.
+  # this test would pass via the ordinary .idea/-prefix dirt check instead of exercising
+  # has_dirty_submodule.
   assert_eq "$(git -C "$WT" status --porcelain)" "" "submodule dirtiness hidden from superproject status (sanity)"
   local out; out="$(wt remove app fix S 2>&1)"
   assert_eq "$?" 1

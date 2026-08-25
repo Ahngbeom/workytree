@@ -76,6 +76,21 @@ test_set_creates_file_when_missing() {
   assert_eq "$(wt config get default_project)" "fd"
 }
 
+# Coherence: the FIRST config_set ever written to a brand-new (empty) config file used to
+# unconditionally prefix a blank line before the new section header -- the separator meant to
+# visually set a new section apart from PRECEDING content, printed even when there was no
+# preceding content to separate from. `workytree init`'s first write (project add's
+# repo_root) hits exactly this path.
+test_first_write_to_fresh_config_has_no_leading_blank_line() {
+  wt config set project.fd.repo_root ~/a
+  local f="$XDG_CONFIG_HOME/workytree/config"
+  assert_eq "$(sed -n '1p' "$f")" "[project fd]" "a fresh config must not start with a blank line"
+  # A section appended to an ALREADY non-empty file still gets the separator -- unchanged.
+  wt config set project.new.repo_root ~/n
+  local before_new; before_new="$(grep -B1 -F '[project new]' "$f" | head -1)"
+  assert_eq "$before_new" "" "separator blank line before a LATER section must still be there"
+}
+
 test_parse_error_reports_line() {
   write_config <<'EOF'
 default_project = fd

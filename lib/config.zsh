@@ -276,6 +276,12 @@ _config_write() {
   _config_prepare_write_target "$file"; file="$REPLY_WRITE_TARGET"
   _config_mktemp "$file"; tmp="$REPLY_TMP"
   [[ -z "$want_type" ]] && { in_target=1; seen_target=1; }
+  # Tidiness: a brand-new (empty) config must not START with a blank line. The blank line
+  # printed just below the loop exists to visually separate a newly-appended section from
+  # whatever content came before it -- there is nothing to separate from when the file is
+  # empty, which is exactly the FIRST config_set of a fresh `workytree init`/`project add`.
+  local -i had_content=0
+  [[ -s "$file" ]] && had_content=1
   {
     while IFS= read -r line || [[ -n "$line" ]]; do
       line="${line%$'\r'}"
@@ -295,7 +301,8 @@ _config_write() {
       if (( seen_target )); then
         print -r -- "$key = $value"
       else
-        print -r -- ""; print -r -- "[$want_type $want_name]"; print -r -- "$key = $value"
+        (( had_content )) && print -r -- ""
+        print -r -- "[$want_type $want_name]"; print -r -- "$key = $value"
       fi
     fi
   } > "$tmp" || _config_write_failed "$tmp" "$file"
