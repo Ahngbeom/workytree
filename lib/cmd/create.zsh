@@ -22,6 +22,20 @@ _wt_worktree_is_registered() {
   (( found ))
 }
 
+# create_pick_repo: interactive project -> repo selection. Sets project, repo, repo_path in
+# the CALLER's scope (cmd_create's locals) -- deliberately not `local` here.
+create_pick_repo() {
+  local -a names
+  if [[ -n "$WT_PROJECT_OPT" ]]; then project="$WT_PROJECT_OPT"
+  elif (( ${#WT_PROJECTS} > 1 )); then prompt_choose "project" 0 "${WT_PROJECTS[@]}"; project="$REPLY"
+  else project="${WT_PROJECTS[1]}"; fi
+  names=( ${(f)"$(all_repos "$project" | cut -f1)"} )
+  (( ${#names} )) || die "no repos found under project '$project' ($(project_repo_root "$project"))"
+  prompt_choose "repo" 0 "${names[@]}"; repo="$REPLY"
+  local r; r="$(resolve_repo "$repo" "$project")" || exit $?
+  repo_path="${r#*$'\t'}"
+}
+
 # create_do <project> <repo> <repo_path> <kind> <ticket> <base_ref> [base_label]
 # Prints the summary, adds the worktree, and prints the path as the LAST line. base_ref is
 # the raw ref handed to git; base_label is the human-facing display text (may carry the
@@ -83,7 +97,7 @@ cmd_create() {
 
   if [[ -z "$kind" ]]; then
     prompt_available || usage_error "kind is required: workytree create [repo] <kind> <ticket> [base]"
-    prompt_choose "kind" 1 $(config_kinds); kind="$REPLY"
+    prompt_choose "kind" 1 ${(f)"$(config_kinds)"}; kind="$REPLY"
   fi
   if [[ -z "$ticket" ]]; then
     prompt_available || usage_error "ticket is required: workytree create [repo] <kind> <ticket> [base]"
