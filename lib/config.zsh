@@ -1,5 +1,10 @@
 # Single point of config-file I/O. Format: INI-like; "[project <name>]" / "[repo <name>]" sections,
-# "key = value" lines, "#" comments (whole line, or after whitespace). No repeated keys.
+# "key = value" lines, "#" comments (whole line, or after whitespace — a "#" glued to a non-space
+# character is not treated as a comment start). No repeated keys: a key reused within the same
+# section (or twice at global scope) is a hard error naming file:lineno, same as a duplicate
+# section header. Writes (config_set/config_unset/config_remove_section) write through a
+# symlinked config file rather than replacing the link, and normalize the whole file to LF line
+# endings even when the original used CRLF.
 typeset -g  WT_CONFIG_FILE=""
 typeset -gi WT_CONFIG_EXISTS=0
 typeset -gA WT_CFG WT_PCFG WT_RCFG
@@ -9,15 +14,21 @@ config_file_path() {
   print -r -- "${WORKYTREE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/workytree/config}"
 }
 
-# expand_path <p>: "~/x" and "$VAR"/"${VAR}" expansion; trailing slash removed.
+# expand_path <p>: "~/x" and "$VAR"/"${VAR}" expansion; trailing slash removed. Each "$VAR" is
+# expanded in a single left-to-right pass over the ORIGINAL string — the substituted value is
+# appended to the result and never re-scanned, so a self- or mutually-referential variable
+# (e.g. FOO='$FOO') cannot make this loop forever.
 expand_path() {
   local p="$1"
   [[ "$p" == "~" ]] && p="$HOME"
   p="${p/#\~\//$HOME/}"
-  while [[ "$p" =~ '\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?' ]]; do
-    p="${p/"$MATCH"/${(P)match[1]:-}}"
+  local result="" rest="$p"
+  while [[ "$rest" =~ '\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?' ]]; do
+    result+="${rest[1,MBEGIN-1]}${(P)match[1]:-}"
+    rest="${rest[MEND+1,-1]}"
   done
-  print -r -- "${p%/}"
+  result+="$rest"
+  print -r -- "${result%/}"
 }
 
 _config_strip_comment() {
@@ -33,6 +44,7 @@ config_load() {
   [[ -f "$WT_CONFIG_FILE" ]] || return 0
   WT_CONFIG_EXISTS=1
   local raw line lineno=0 sect_type="" sect_name="" key value
+  local -A seen_keys
   while IFS= read -r raw || [[ -n "$raw" ]]; do
     (( lineno++ ))
     line="$(_config_strip_comment "${raw%%$'\r'}")"
@@ -47,10 +59,13 @@ config_load() {
         (( ${WT_REPOS[(Ie)$sect_name]} )) && die "duplicate [repo $sect_name] at $WT_CONFIG_FILE:$lineno"
         WT_REPOS+=("$sect_name")
       fi
+      seen_keys=()
       continue
     fi
     if [[ "$line" =~ '^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$' ]]; then
       key="$match[1]" value="${match[2]%%[[:space:]]#}"
+      (( ${+seen_keys[$key]} )) && die "duplicate key $key at $WT_CONFIG_FILE:$lineno"
+      seen_keys[$key]=1
       case "$sect_type" in
         "")      WT_CFG[$key]="$value" ;;
         project) WT_PCFG[$sect_name.$key]="$value" ;;
@@ -97,10 +112,12 @@ _config_write() {
   file="$(config_file_path)"
   mkdir -p "${file:h}"
   [[ -f "$file" ]] || : > "$file"
+  [[ -L "$file" ]] && file="${file:A}"
   tmp="$(mktemp "${file}.XXXXXX")"
   [[ -z "$want_type" ]] && { in_target=1; seen_target=1; }
   {
     while IFS= read -r line || [[ -n "$line" ]]; do
+      line="${line%$'\r'}"
       if [[ "$line" =~ '^[[:space:]]*\[[[:space:]]*(project|repo)[[:space:]]+([^]]*)\][[:space:]]*$' ]]; then
         if (( in_target && !done && !delete )); then print -r -- "$key = $value"; done=1; fi
         cur_type="$match[1]"; cur_name="${${match[2]##[[:space:]]#}%%[[:space:]]#}"
@@ -132,9 +149,11 @@ config_remove_section() {
   local want_type="$1" want_name="$2" file tmp line skipping=0
   file="$(config_file_path)"
   [[ -f "$file" ]] || return 0
+  [[ -L "$file" ]] && file="${file:A}"
   tmp="$(mktemp "${file}.XXXXXX")"
   {
     while IFS= read -r line || [[ -n "$line" ]]; do
+      line="${line%$'\r'}"
       if [[ "$line" =~ '^[[:space:]]*\[[[:space:]]*(project|repo)[[:space:]]+([^]]*)\][[:space:]]*$' ]]; then
         local n="${${match[2]##[[:space:]]#}%%[[:space:]]#}"
         if [[ "$match[1]" == "$want_type" && "$n" == "$want_name" ]]; then skipping=1; continue; else skipping=0; fi
