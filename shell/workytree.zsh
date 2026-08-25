@@ -9,13 +9,50 @@
 typeset -g WORKYTREE_ROOT="${${(%):-%x}:A:h:h}"
 typeset -g WORKYTREE_BIN="$WORKYTREE_ROOT/bin/workytree"
 
+# _workytree_locate_subcommand <args...>: prints the 1-based index of the first token that
+# isn't one of bin/workytree's own global options, or 0 if every token is consumed as an
+# option (no subcommand present). Mirrors bin/workytree's parse_global_opts token-for-token
+# (a bare --project consumes the NEXT token as its value; --project=value/--yes/-y/--no-color
+# are each a single token) so the wrapper and the CLI always agree on which token is the
+# subcommand. R34: the CLI accepts these options in ANY position -- a wrapper that only ever
+# looked at "$1" would silently skip the auto-cd for e.g. `wt --project foo create ...`.
+_workytree_locate_subcommand() {
+  local -i i=1 skip=0
+  local a
+  for a in "$@"; do
+    if (( skip )); then
+      skip=0
+    else
+      case "$a" in
+        --project)              skip=1 ;;
+        --project=*|--yes|-y|--no-color) ;;
+        *) print -r -- "$i"; return 0 ;;
+      esac
+    fi
+    (( i++ ))
+  done
+  print -r -- 0
+}
+
 workytree() {
-  case "${1:-}" in
+  local -i sub_idx
+  sub_idx="$(_workytree_locate_subcommand "$@")"
+  local sub=""
+  (( sub_idx > 0 )) && sub="${@[$sub_idx]}"
+  case "$sub" in
     create|cd) ;;
     *) "$WORKYTREE_BIN" "$@"; return $? ;;
   esac
+  local -a call_args; call_args=("$@")
+  # cd's output is byte-identical to path's today (lib/cmd/path.zsh: `cmd_cd() { cmd_path
+  # "$@"; }`), but "path" is the name documented as script-safe, so substitute it in place of
+  # whichever token _workytree_locate_subcommand found -- not necessarily "$1", now that
+  # global options can precede it (R34). A future divergence between cmd_cd and cmd_path then
+  # stays the CLI's decision, not a side effect of which subcommand name the wrapper happened
+  # to invoke.
+  [[ "$sub" == cd ]] && call_args[$sub_idx]=path
   local output exit_code target head
-  if [[ "$1" == cd ]]; then output="$("$WORKYTREE_BIN" path "${@:2}")"; else output="$("$WORKYTREE_BIN" "$@")"; fi
+  output="$("$WORKYTREE_BIN" "${call_args[@]}")"
   exit_code=$?
   # Split "everything except the last line" from "the last line" without a `path`/`fpath`
   # local (R16: `path` is tied to $PATH in zsh, even as a local). Works for empty output, a
@@ -51,11 +88,30 @@ _workytree_alias_enabled() {
   esac
 }
 
+# R35: this file must NOT contain a literal `wt() { ... }` anywhere, even inside a branch
+# that will not run. zsh parses an entire if/else block at PARSE time, before deciding which
+# branch executes -- so if the caller already has `wt` defined as an ALIAS, the parser sees
+# `wt() {` while `wt` still names that alias and throws a raw "defining function based on
+# alias `wt'" / "parse error near `()'" error at SOURCE time, unconditionally, regardless of
+# which branch would actually run. Assigning to zsh's `functions` special array is a plain
+# string assignment (`functions[wt]=...`), not `name() { ... }` syntax, so it never triggers
+# that alias/function collision; `eval`-ing a `wt() { ... }` string would dodge the same
+# parse-time issue but reads far less obviously than a documented special array.
+typeset -g _WORKYTREE_WT_BODY='workytree "$@"'
+typeset -gi _WORKYTREE_WT_OWNED="${_WORKYTREE_WT_OWNED:-0}"
+
 if _workytree_alias_enabled; then
-  if (( $+commands[wt] || $+functions[wt] || $+aliases[wt] )); then
+  if (( _WORKYTREE_WT_OWNED )); then
+    # R36: this file already installed `wt` earlier in THIS shell (double-sourced, e.g. by a
+    # plugin manager plus an explicit re-source in .zshrc) -- that's not a foreign `wt` to
+    # warn about, so just reassert it silently rather than re-printing the "already defined"
+    # warning against our own earlier install.
+    functions[wt]="$_WORKYTREE_WT_BODY"
+  elif (( $+commands[wt] || $+functions[wt] || $+aliases[wt] )); then
     print -u2 "workytree: 'wt' is already defined; not installing the alias (set 'alias_wt = false' to silence)"
   else
-    wt() { workytree "$@"; }
+    functions[wt]="$_WORKYTREE_WT_BODY"
+    _WORKYTREE_WT_OWNED=1
   fi
 fi
 
