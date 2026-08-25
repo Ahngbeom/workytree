@@ -13,6 +13,18 @@
 # one keystroke (Enter) for the two fields that were already right. Every prompt_input call
 # still goes through prompt.zsh's own EOF handling (_prompt_read exits 130 on EOF), so
 # running out of input mid-retry terminates the process rather than looping forever.
+#
+# R33 (fix round 1): EVERY answer -- including the alias question -- is collected BEFORE the
+# call that writes anything to disk. Originally the alias question was asked once, after a
+# successful `cmd_project add`; but that write is REAL (a subshell does not sandbox
+# filesystem I/O -- only the command substitution's own exit/die unwinds), so a user who
+# cancelled at that last question was left with a half-configured, permanently-written
+# project (no alias_wt) and no way to re-run `init` ("config already exists"). Moving the
+# alias question inside the retry loop, ahead of the `cmd_project add` call, means every
+# cancellation point in the wizard -- `q` or EOF, at any question -- is reached before
+# anything is written, the same rule `create` already follows for its own confirmation. The
+# accepted tradeoff: a user now answers the alias question before the roots are validated,
+# so a validation retry re-asks it too -- harmless, since a retry loses no work either way.
 cmd_init() {
   (( WT_CONFIG_EXISTS )) && die "config already exists: $WT_CONFIG_FILE -- add more with 'workytree project add' or edit with 'workytree config edit'"
   local name rr wr alias_wt=true
@@ -32,17 +44,21 @@ cmd_init() {
     [[ -n "$name" ]] || name="project"
     rr="$HOME/src"
     wr="$HOME/worktrees"
-    local out rc
+    local out rc alias_default=y
     while true; do
       prompt_input "project name" "$name"; name="$REPLY"
       prompt_input "repo_root (directory containing your repos)" "$rr"; rr="$REPLY"
       prompt_input "worktree_root (where worktrees are created)" "$wr"; wr="$REPLY"
+      if prompt_confirm "install 'wt' as a short alias for workytree?" "$alias_default"; then
+        alias_wt=true; alias_default=y
+      else
+        alias_wt=false; alias_default=n
+      fi
       out="$(cmd_project add "$name" "$rr" "$wr" 2>&1)"; rc=$?
       (( rc == 0 )) && break
       _prompt_say "$out"$'\n'"let's fix that -- re-enter the values below (press Enter to keep a value shown)."$'\n'
     done
     _prompt_say "$out"$'\n'
-    prompt_confirm "install 'wt' as a short alias for workytree?" y && alias_wt=true || alias_wt=false
   else
     usage_error "usage: workytree init [<name> <repo_root> <worktree_root>]"
   fi

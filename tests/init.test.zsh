@@ -37,19 +37,95 @@ test_init_noninteractive_relative_worktree_root_exits_1_no_config() {
 }
 
 test_init_interactive_reasks_after_bad_worktree_root() {
-  # name, repo_root, a BAD (relative) worktree_root -> retry re-asks all three (empty line
-  # keeps the previously typed value as the default) -> a GOOD worktree_root -> alias no
-  answers "fd" "$HOME/fd/products" "rel/wts" "" "" "$HOME/fd/wts" "n"
+  # R33: the alias question is now asked EVERY pass through the loop, ahead of the write
+  # attempt -- so each attempt is name, repo_root, worktree_root, alias (4 answers), not 3.
+  # Attempt 1: a BAD (relative) worktree_root, alias "n" -> cmd_project add fails, nothing
+  # written. Attempt 2: empty lines keep the previously typed name/repo_root, a GOOD
+  # worktree_root, and alias "y" this time -> succeeds. Proves the alias choice from the
+  # attempt that actually succeeds is what's honored, not a stale earlier answer.
+  answers "fd" "$HOME/fd/products" "rel/wts" "n" "" "" "$HOME/fd/wts" "y"
   wt init >/dev/null 2>&1
   assert_eq "$?" 0
   assert_eq "$(wt config get project.fd.worktree_root)" "$HOME/fd/wts"
+  assert_eq "$(wt config get alias_wt)" "true"
 }
 
 test_init_interactive_eof_during_reask_exits_130_no_partial_config() {
-  # name, repo_root, a BAD worktree_root, then input runs out mid-retry
-  answers "fd" "$HOME/fd/products" "rel/wts"
+  # name, repo_root, a BAD worktree_root, alias answer, then input runs out mid-retry
+  answers "fd" "$HOME/fd/products" "rel/wts" "n"
   assert_exit 130 wt init
   assert_not_exists "$XDG_CONFIG_HOME/workytree/config"
+}
+
+# R33 (fix round 1): cancelling ("q" or EOF) at ANY wizard question -- including the LAST one
+# (the alias confirm, previously asked only AFTER cmd_project add had already written a real
+# project section to disk) -- must exit 130 and leave NO config file behind. Each pair below
+# reproduces cancellation at one specific question.
+
+test_init_cancel_at_name_with_q() {
+  answers "q"
+  assert_exit 130 wt init
+  assert_not_exists "$XDG_CONFIG_HOME/workytree/config"
+}
+
+test_init_cancel_at_name_with_eof() {
+  answers
+  assert_exit 130 wt init
+  assert_not_exists "$XDG_CONFIG_HOME/workytree/config"
+}
+
+test_init_cancel_at_repo_root_with_q() {
+  answers "fd" "q"
+  assert_exit 130 wt init
+  assert_not_exists "$XDG_CONFIG_HOME/workytree/config"
+}
+
+test_init_cancel_at_repo_root_with_eof() {
+  answers "fd"
+  assert_exit 130 wt init
+  assert_not_exists "$XDG_CONFIG_HOME/workytree/config"
+}
+
+test_init_cancel_at_worktree_root_with_q() {
+  answers "fd" "$HOME/fd/products" "q"
+  assert_exit 130 wt init
+  assert_not_exists "$XDG_CONFIG_HOME/workytree/config"
+}
+
+test_init_cancel_at_worktree_root_with_eof() {
+  answers "fd" "$HOME/fd/products"
+  assert_exit 130 wt init
+  assert_not_exists "$XDG_CONFIG_HOME/workytree/config"
+}
+
+# The critical case: cancelling at the LAST question. Before the R33 fix, cmd_project add had
+# ALREADY run (and written) by this point -- a subshell's command substitution does not
+# sandbox filesystem I/O, only its own control flow -- so this is the scenario that left a
+# brand-new user with a permanently half-written, unrecoverable config.
+test_init_cancel_at_alias_with_q() {
+  answers "fd" "$HOME/fd/products" "$HOME/fd/wts" "q"
+  assert_exit 130 wt init
+  assert_not_exists "$XDG_CONFIG_HOME/workytree/config"
+}
+
+test_init_cancel_at_alias_with_eof() {
+  answers "fd" "$HOME/fd/products" "$HOME/fd/wts"
+  assert_exit 130 wt init
+  assert_not_exists "$XDG_CONFIG_HOME/workytree/config"
+}
+
+# Untested-guard class (this project has hit it four times before): the default project name
+# offered by the wizard is sanitized from the cwd's basename to project add's own charset
+# ([A-Za-z0-9_-]+). Without a cwd whose name actually contains a disallowed character, AND an
+# empty first answer to actually accept that default, this sanitization is never exercised --
+# every other test in this file supplies an explicit non-empty name. This test does both.
+test_init_sanitizes_default_project_name_from_cwd() {
+  local d="$TMP_ROOT/proj.dir with space"
+  mkdir -p "$d"
+  answers "" "$HOME/src" "$HOME/worktrees" "n"
+  ( cd "$d" && wt init >/dev/null 2>&1 )
+  assert_eq "$?" 0
+  assert_eq "$(wt config get default_project)" "proj-dir-with-space"
 }
 
 run_tests
