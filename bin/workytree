@@ -1,0 +1,68 @@
+#!/usr/bin/env zsh
+# workytree — git worktree manager. Pure CLI: computes paths, calls git, prints. Never cd's.
+set -u
+setopt extendedglob
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:${PATH:-}"
+
+typeset -g WORKYTREE_VERSION="0.1.0"
+typeset -g WORKYTREE_HOME="${0:A:h:h}"   # :A resolves the ~/.local/bin symlink
+
+typeset -g  WT_PROJECT_OPT=""
+typeset -gi WT_YES=0
+typeset -ga ARGS
+
+local f
+for f in "$WORKYTREE_HOME"/lib/*.zsh(N) "$WORKYTREE_HOME"/lib/cmd/*.zsh(N); do
+  source "$f"
+done
+
+usage() {
+  cat <<'EOF'
+Usage: workytree <command> [args] [--project <name>] [--yes|-y] [--no-color]
+
+  workytree init [name repo_root worktree_root]      interactive first-time setup
+  workytree create [repo] [kind] [ticket] [base]     create (or reuse) a worktree; asks for missing args
+  workytree remove <repo> <kind> <ticket> [--force] [-b|--branch] [-B|--branch-force]
+  workytree prune [repo]                             prune stale refs + orphan dirs
+  workytree list [repo]                              git worktree list per repo
+  workytree repos                                    repos across all projects
+  workytree path [repo [kind [ticket]]]              print a path (script-friendly)
+  workytree cd   [repo [kind [ticket]]]              cd (shell integration only)
+  workytree project list|add <name> <repo_root> <worktree_root>|remove <name>|default <name>
+  workytree repo    list|add <path> [--name n] [--project p]|remove <name>
+  workytree config  path|get <key>|set <key> <value>|edit
+  workytree help | --version
+EOF
+}
+
+parse_global_opts() {
+  ARGS=()
+  while (( $# )); do
+    case "$1" in
+      --project)   shift; [[ $# -gt 0 ]] || usage_error "--project requires a name"; WT_PROJECT_OPT="$1" ;;
+      --project=*) WT_PROJECT_OPT="${1#--project=}" ;;
+      --yes|-y)    WT_YES=1 ;;
+      --no-color)  WT_COLOR=0 ;;
+      *)           ARGS+=("$1") ;;
+    esac
+    shift
+  done
+}
+
+main() {
+  parse_global_opts "$@"
+  ui_init
+  set -- "${ARGS[@]}"
+  (( $# )) || { usage >&2; exit 2; }
+  local command="$1"; shift
+  case "$command" in
+    help|-h|--help) usage ;;
+    --version|version) print -r -- "workytree $WORKYTREE_VERSION" ;;
+    init|create|remove|prune|list|repos|path|cd|project|repo|config|__complete)
+      (( $+functions[cmd_$command] )) || die "command not implemented yet: $command"
+      "cmd_$command" "$@" ;;
+    *) usage >&2; usage_error "unknown command: $command" ;;
+  esac
+}
+
+main "$@"
