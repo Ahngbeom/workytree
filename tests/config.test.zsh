@@ -82,7 +82,7 @@ default_project = fd
 this is not valid
 EOF
   local out; out="$(wt config get default_project 2>&1)"
-  assert_eq "$?" 1
+  assert_eq "$?" 3
   assert_contains "$out" "config:2"
 }
 
@@ -95,7 +95,9 @@ worktree_root = ~/y
 repo_root = ~/z
 worktree_root = ~/w
 EOF
-  assert_exit 1 wt config get default_project
+  local out; out="$(wt config get default_project 2>&1)"
+  assert_eq "$?" 3
+  assert_contains "$out" "config:4"
 }
 
 test_unset_removes_key_preserves_rest_of_file() {
@@ -194,7 +196,7 @@ repo_root = ~/a
 repo_root = ~/b
 EOF
   local out; out="$(wt config get project.fd.repo_root 2>&1)"
-  assert_eq "$?" 1
+  assert_eq "$?" 3
   assert_contains "$out" "config:3"
 }
 
@@ -204,7 +206,7 @@ default_project = fd
 default_project = other
 EOF
   local out; out="$(wt config get default_project 2>&1)"
-  assert_eq "$?" 1
+  assert_eq "$?" 3
   assert_contains "$out" "config:2"
 }
 
@@ -292,15 +294,37 @@ test_broken_config_require_config_command_exits_3_with_message() {
   assert_contains "$out" "config:2"
 }
 
-test_broken_config_get_and_set_exit_1_with_message() {
+# R44 (fix round 5): 3, not the 1 R38 chose. Exit 1 from `config get` now means exactly one
+# thing -- the key is not set -- so the assertion below pairs the code with the message the
+# same way every other config-state test does. The companion assertion for the OTHER meaning
+# of 1 lives in test_config_get_unset_key_on_valid_config_is_exit_1 below: without it,
+# collapsing both meanings onto one code would still pass this test.
+test_broken_config_get_and_set_exit_3_with_message() {
   _broken_config
   local out; out="$(wt config get kinds 2>&1)"
-  assert_eq "$?" "1"
+  assert_eq "$?" "3"
   assert_contains "$out" "config:2"
 
   out="$(wt config set foo bar 2>&1)"
-  assert_eq "$?" "1"
+  assert_eq "$?" "3"
   assert_contains "$out" "config:2"
+}
+
+# The other half of R44: on a VALID config, a genuinely unset key is still exit 1, and its
+# message is `config get`'s own "config key not set", never a config:N load error. The two
+# tests together pin that 1 and 3 mean different things through the same subcommand.
+test_config_get_unset_key_on_valid_config_is_exit_1() {
+  write_config <<'EOF'
+default_project = fd
+
+[project fd]
+repo_root = ~/a
+worktree_root = ~/b
+EOF
+  local out; out="$(wt config get nosuchkey 2>&1)"
+  assert_eq "$?" "1"
+  assert_contains "$out" "config key not set: nosuchkey"
+  [[ "$out" == *"config:"[0-9]* ]] && { (( ++_fail )); print -u2 "  FAIL: unset key reported as a load error: $out"; print >> "$WT_FAIL_FILE" "FAIL: unset key reported as a load error"; } || (( ++_pass ))
 }
 
 # R41 (fix round 3): `init` against a config that failed to PARSE now names the SPECIFIC
@@ -310,7 +334,7 @@ test_broken_config_get_and_set_exit_1_with_message() {
 test_broken_config_init_still_refuses() {
   _broken_config
   local out; out="$(wt init x ~/a ~/b 2>&1)"
-  assert_eq "$?" "1"
+  assert_eq "$?" "3"   # R44: was 1 (die); the same recorded load error every consumer exits 3 for
   assert_contains "$out" "config:2"
 }
 
@@ -369,7 +393,7 @@ EOF
   rm -f "$errfile"
 
   out="$(wt config get kinds 2>&1)"
-  assert_eq "$?" "1"; assert_contains "$out" "not readable"
+  assert_eq "$?" "3"; assert_contains "$out" "not readable"
 
   out="$(wt list 2>&1)"
   assert_eq "$?" "3"; assert_contains "$out" "not readable"
@@ -379,7 +403,7 @@ EOF
   assert_contains "$(wt --version)" "workytree"
 
   out="$(wt init x ~/a ~/b 2>&1)"
-  assert_eq "$?" "1"; assert_contains "$out" "not readable"
+  assert_eq "$?" "3"; assert_contains "$out" "not readable"
 
   chmod 644 "$cfg"  # must be readable/deletable again before setup_env's teardown rm -rf
 }
@@ -395,7 +419,7 @@ test_directory_at_config_path_all_consumers() {
   local out
 
   out="$(wt init x ~/a ~/b 2>&1)"
-  assert_eq "$?" "1"
+  assert_eq "$?" "3"
   assert_contains "$out" "not a regular file"
   assert_eq "$(print -l -- "$cfg"/*(N))" ""  # no stray temp file left inside
 
@@ -407,7 +431,7 @@ test_directory_at_config_path_all_consumers() {
   rm -f "$errfile"
 
   out="$(wt config get kinds 2>&1)"
-  assert_eq "$?" "1"; assert_contains "$out" "not a regular file"
+  assert_eq "$?" "3"; assert_contains "$out" "not a regular file"
 
   out="$(wt list 2>&1)"
   assert_eq "$?" "3"; assert_contains "$out" "not a regular file"

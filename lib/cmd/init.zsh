@@ -37,8 +37,16 @@ cmd_init() {
   # config into" -- checked first so the user sees the SPECIFIC problem (not a regular
   # file / not readable) rather than the generic "config already exists", which would be
   # misleading here since no config, valid or otherwise, actually exists yet.
+  #
+  # R44 (fix round 5): this branch exits 3, not die()'s 1. It surfaces the SAME recorded
+  # WT_CONFIG_LOAD_ERROR every other consumer exits 3 for, and `init` itself already exits 3
+  # when a WRITE cannot proceed (R42's _config_die_state) -- so leaving the read side at 1
+  # meant `wt init` reported two different codes for two config-state problems. The sibling
+  # branch below ("config already exists") deliberately KEEPS exit 1: it is not a failure to
+  # use the config, it is a refusal of an operation that does not apply because a perfectly
+  # good config is already there. See the round-5 consumer re-audit in the task report.
   if [[ -n "$WT_CONFIG_LOAD_ERROR" ]]; then
-    die "$WT_CONFIG_LOAD_ERROR"
+    error "$WT_CONFIG_LOAD_ERROR"; exit 3
   elif (( WT_CONFIG_EXISTS )); then
     die "config already exists: $WT_CONFIG_FILE -- add more with 'workytree project add' or edit with 'workytree config edit'"
   fi
@@ -71,6 +79,19 @@ cmd_init() {
       fi
       out="$(cmd_project add "$name" "$rr" "$wr" 2>&1)"; rc=$?
       (( rc == 0 )) && break
+      # R45 (fix round 5): a re-ask is only honest when a DIFFERENT ANSWER could succeed.
+      # `cmd_project add` exits 3 for exactly one class of failure -- the state of the config
+      # file or the directory it lives in (require_loadable_config's recorded load error, or
+      # _config_die_state's unwritable/uncreatable target) -- and no value typed at these
+      # prompts can change any of that. Looping on it re-asked forever, showing the same
+      # message each pass, and terminated only when the user thought to send EOF (exit 130):
+      # a first-time user reads that as the tool malfunctioning. Every other non-zero code
+      # (1 for a bad root value, 2 for a blank one) IS answer-fixable and still re-asks.
+      if (( rc == 3 )); then
+        print -u2 -r -- "$out"
+        error "'workytree init' cannot fix this from inside the wizard -- resolve it outside workytree, then run 'workytree init' again"
+        exit 3
+      fi
       _prompt_say "$out"$'\n'"let's fix that -- re-enter the values below (press Enter to keep a value shown)."$'\n'
     done
     _prompt_say "$out"$'\n'

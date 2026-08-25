@@ -128,4 +128,35 @@ test_init_sanitizes_default_project_name_from_cwd() {
   assert_eq "$(wt config get default_project)" "proj-dir-with-space"
 }
 
+# R45 (fix round 5): the wizard must ABORT, not re-ask, when the obstacle is the ENVIRONMENT
+# rather than the answer. With the config directory read-only, no value typed at any prompt
+# can ever make `cmd_project add` succeed, so the pre-fix loop re-asked forever (showing the
+# right message each pass) and terminated only when the user thought to send EOF -- exit 130,
+# which reads as the tool malfunctioning rather than as a diagnosis.
+#
+# BOUND (so a regression FAILS the suite instead of hanging it): the answer file is finite
+# and holds enough answers for three full passes. prompt.zsh's _prompt_read exits 130 on EOF,
+# so a wizard that loops runs out of input and terminates at 130 -- the assertions below then
+# fail on the exit code and on the re-ask banner count, and the suite never hangs. This is a
+# hard bound in the code path itself, not a wall-clock guess.
+#
+# R23: exit 3 alone would not catch a regression (a looping wizard that ran out of answers
+# exits 130, and plenty of other failures exit 3), so this asserts workytree's OWN abort
+# wording AND that the re-ask banner -- also workytree's own wording, from the loop this fix
+# removes for this case -- appears ZERO times.
+test_init_wizard_aborts_instead_of_looping_on_readonly_config_dir() {
+  mkdir -p "$XDG_CONFIG_HOME/workytree"
+  chmod 555 "$XDG_CONFIG_HOME/workytree"
+  answers "me" "$HOME/src" "$HOME/wts" "n" \
+          "me" "$HOME/src" "$HOME/wts" "n" \
+          "me" "$HOME/src" "$HOME/wts" "n"
+  local out; out="$(wt init 2>&1)"
+  assert_eq "$?" "3"
+  assert_contains "$out" "cannot fix this from inside the wizard"
+  assert_contains "$out" "could not create the config file"
+  assert_eq "$(print -r -- "$out" | grep -c "let's fix that")" "0" "the wizard must not re-ask"
+  assert_not_exists "$XDG_CONFIG_HOME/workytree/config"
+  chmod 755 "$XDG_CONFIG_HOME/workytree"  # restore unconditionally, before teardown's rm -rf
+}
+
 run_tests
