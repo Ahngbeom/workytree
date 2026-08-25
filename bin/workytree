@@ -52,6 +52,7 @@ parse_global_opts() {
 main() {
   parse_global_opts "$@"
   ui_init
+  config_load
   set -- "${ARGS[@]}"
   (( $# )) || { usage >&2; exit 2; }
   local command="$1"; shift
