@@ -98,20 +98,44 @@ _workytree_alias_enabled() {
 # that alias/function collision; `eval`-ing a `wt() { ... }` string would dodge the same
 # parse-time issue but reads far less obviously than a documented special array.
 typeset -g _WORKYTREE_WT_BODY='workytree "$@"'
-typeset -gi _WORKYTREE_WT_OWNED="${_WORKYTREE_WT_OWNED:-0}"
+
+# _workytree_wt_is_ours: true if `wt` is currently a FUNCTION whose body is exactly what this
+# file would install. R37: an earlier version of this file tracked a boolean "did I install
+# `wt` at some point in this shell" flag -- that answers the wrong question. It stays true
+# forever once set, so re-sourcing after something ELSE redefined `wt` (another plugin, or
+# the user) silently clobbered that redefinition with no warning, defeating the exact
+# guarantee this file exists to provide. Comparing bodies answers "is THIS wt still mine"
+# instead, and needs no persisted state at all -- it is recomputed fresh, from what zsh
+# currently reports, on every source. Compares against zsh's own NORMALIZED form of the body
+# (writing the identical string to a throwaway function name and reading it back), not the
+# raw source string this file writes -- verified empirically that zsh reformats a function
+# body when storing it (`${functions[name]}` comes back with a leading tab, whether the
+# function was defined via `functions[name]=...` or a literal `name() { ... }`), so comparing
+# against the literal string above would never match.
+_workytree_wt_is_ours() {
+  (( $+functions[wt] )) || return 1
+  functions[_workytree_wt_probe]="$_WORKYTREE_WT_BODY"
+  local -i is_ours=0
+  [[ "${functions[wt]}" == "${functions[_workytree_wt_probe]}" ]] && is_ours=1
+  unfunction _workytree_wt_probe
+  return $(( ! is_ours ))
+}
 
 if _workytree_alias_enabled; then
-  if (( _WORKYTREE_WT_OWNED )); then
-    # R36: this file already installed `wt` earlier in THIS shell (double-sourced, e.g. by a
-    # plugin manager plus an explicit re-source in .zshrc) -- that's not a foreign `wt` to
-    # warn about, so just reassert it silently rather than re-printing the "already defined"
-    # warning against our own earlier install.
-    functions[wt]="$_WORKYTREE_WT_BODY"
-  elif (( $+commands[wt] || $+functions[wt] || $+aliases[wt] )); then
+  if (( $+functions[wt] )); then
+    if _workytree_wt_is_ours; then
+      # Double-sourced (R36), or a fresh shell that happens to already have an identical
+      # `wt` -- either way this is ours, so reassert it silently rather than warn.
+      functions[wt]="$_WORKYTREE_WT_BODY"
+    else
+      print -u2 "workytree: 'wt' is already defined; not installing the alias (set 'alias_wt = false' to silence)"
+    fi
+  elif (( $+commands[wt] || $+aliases[wt] )); then
     print -u2 "workytree: 'wt' is already defined; not installing the alias (set 'alias_wt = false' to silence)"
   else
+    # Nothing defined at all -- including the case where `wt` was ours but got removed
+    # entirely (e.g. `unfunction wt`); there's nothing foreign here to protect.
     functions[wt]="$_WORKYTREE_WT_BODY"
-    _WORKYTREE_WT_OWNED=1
   fi
 fi
 

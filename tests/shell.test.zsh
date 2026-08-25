@@ -83,6 +83,25 @@ test_double_source_is_idempotent_no_warning() {
   assert_eq "$has_warning" 0 "no false 'already defined' warning re-sourcing our own wt"
 }
 
+# R37 (fix round 2 regression): install `wt`, have something else redefine it (the
+# near-universal `alias reload='source ~/.zshrc'` shape), then re-source. A boolean "did I
+# ever install wt" flag would treat this as its own earlier install forever and silently
+# clobber the redefinition with no warning -- the file must instead check whether the
+# CURRENTLY-defined `wt` still matches what it would install, and since it does not here,
+# must warn and leave the user's redefinition in place.
+test_resource_after_external_redefinition_warns_and_preserves() {
+  fixture
+  local out
+  out="$(zsh -c "
+    source '$SHELL_FILE'
+    wt() { echo user-overrode-this; }
+    source '$SHELL_FILE'
+    wt
+  " 2>&1)"
+  assert_contains "$out" "already defined"
+  assert_contains "$out" "user-overrode-this"
+}
+
 test_create_cds_into_worktree() {
   fixture
   # >/dev/null 2>&1 (not just >/dev/null): `git worktree add` writes its "Preparing
