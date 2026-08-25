@@ -6,6 +6,13 @@ INSTALL_DIR="${WORKYTREE_INSTALL_DIR:-$HOME/.local/share/workytree}"
 BIN_DIR="${WORKYTREE_BIN_DIR:-$HOME/.local/bin}"
 ZSHRC="${ZDOTDIR:-$HOME}/.zshrc"
 
+# die <msg>: the ONLY way this script ends on a real failure -- always workytree's own
+# message, on stderr, never a bare command's raw diagnostic standing in as the explanation.
+# R49: every command below whose failure would otherwise let `set -eu` kill the script with
+# no "workytree:" prefix (or, worse, mid-write with debris left behind) is now guarded with
+# `|| die "..."` or an explicit `if ! ...; then ...; die ...; fi`.
+die() { echo "workytree: $*" >&2; exit 1; }
+
 if [ -x "$INSTALL_DIR/bin/workytree" ]; then
   if [ -d "$INSTALL_DIR/.git" ] && [ -z "${WORKYTREE_INSTALL_DIR:-}" ]; then
     echo "workytree: updating $INSTALL_DIR"
@@ -23,16 +30,16 @@ if [ -x "$INSTALL_DIR/bin/workytree" ]; then
   fi
 else
   echo "workytree: cloning into $INSTALL_DIR"
-  git clone -q "$REPO_URL" "$INSTALL_DIR"
+  git clone -q "$REPO_URL" "$INSTALL_DIR" || die "failed to clone $REPO_URL into $INSTALL_DIR"
 fi
 
-mkdir -p "$BIN_DIR"
-ln -sfn "$INSTALL_DIR/bin/workytree" "$BIN_DIR/workytree"
-chmod +x "$INSTALL_DIR/bin/workytree"
+mkdir -p "$BIN_DIR" || die "could not create $BIN_DIR"
+ln -sfn "$INSTALL_DIR/bin/workytree" "$BIN_DIR/workytree" || die "could not link $BIN_DIR/workytree -> $INSTALL_DIR/bin/workytree"
+chmod +x "$INSTALL_DIR/bin/workytree" || die "could not mark $INSTALL_DIR/bin/workytree executable"
 echo "workytree: linked $BIN_DIR/workytree"
 
 SOURCE_LINE="[ -s \"$INSTALL_DIR/shell/workytree.zsh\" ] && source \"$INSTALL_DIR/shell/workytree.zsh\""
-touch "$ZSHRC"
+touch "$ZSHRC" || die "could not create/touch $ZSHRC"
 # R48: R47's replace-a-stale-path fix matched any line CONTAINING "shell/workytree.zsh" --
 # which also matches prose mentioning the path, an unrelated alias quoting it, or (worst)
 # a line the user deliberately COMMENTED OUT, silently deleting the first two and
@@ -53,10 +60,25 @@ elif grep -Eq "$ACTIVE_RE" "$ZSHRC"; then
   # removed here -- never prose, an alias, or a commented-out line (DISABLED_RE, checked
   # below, is a superset match that would also hit ACTIVE_RE if not excluded by the elif
   # ordering: an active line is matched here first and never falls through).
-  cp "$ZSHRC" "$ZSHRC.bak-$(date +%Y%m%d-%H%M%S)"
-  grep -Ev -e "$ACTIVE_RE" -e '^# workytree shell integration$' "$ZSHRC" > "$ZSHRC.tmp"
-  mv "$ZSHRC.tmp" "$ZSHRC"
-  printf '\n# workytree shell integration\n%s\n' "$SOURCE_LINE" >> "$ZSHRC"
+  #
+  # R49: filter FIRST, into a temp file, before touching $ZSHRC itself -- a backup is only
+  # ever created immediately before (and alongside) an actual replacement, so a mid-step
+  # failure can never leave an orphaned backup with nothing to show for it. `grep -v` exits
+  # 1 when EVERY input line matched one of the -e patterns, i.e. nothing survives the
+  # filter -- for a .zshrc that WAS nothing but our own stale block, an empty temp file here
+  # is the correct, INTENDED result, not a failure. Only an exit status > 1 is a genuine
+  # grep error. Every failure path below removes the temp file before dying, so it never
+  # lingers regardless of which step failed.
+  : > "$ZSHRC.tmp" || die "could not create a temporary file next to $ZSHRC"
+  grep_rc=0
+  grep -Ev -e "$ACTIVE_RE" -e '^# workytree shell integration$' "$ZSHRC" > "$ZSHRC.tmp" || grep_rc=$?
+  if [ "$grep_rc" -gt 1 ]; then
+    rm -f "$ZSHRC.tmp"
+    die "could not filter $ZSHRC (grep exited $grep_rc); left it untouched"
+  fi
+  cp "$ZSHRC" "$ZSHRC.bak-$(date +%Y%m%d-%H%M%S)" || { rm -f "$ZSHRC.tmp"; die "could not back up $ZSHRC before updating it; left it untouched"; }
+  mv "$ZSHRC.tmp" "$ZSHRC" || { rm -f "$ZSHRC.tmp"; die "could not replace $ZSHRC with the filtered content (a backup was made; the original is otherwise untouched)"; }
+  printf '\n# workytree shell integration\n%s\n' "$SOURCE_LINE" >> "$ZSHRC" || die "could not append the workytree source line to $ZSHRC (a backup was made, and the stale line was already removed -- re-run this installer)"
   echo "workytree: $ZSHRC sourced workytree from a different location; replaced that line with one pointing at $INSTALL_DIR (backup created)"
 elif grep -Eq "$DISABLED_RE" "$ZSHRC"; then
   # The user commented this out on purpose -- never silently reactivate it, and never add a
@@ -67,8 +89,8 @@ else
   if grep -Fq "shell/workytree.zsh" "$ZSHRC"; then
     echo "workytree: note -- $ZSHRC mentions \"shell/workytree.zsh\" on a line that isn't a workytree source statement; leaving that line untouched"
   fi
-  cp "$ZSHRC" "$ZSHRC.bak-$(date +%Y%m%d-%H%M%S)"
-  printf '\n# workytree shell integration\n%s\n' "$SOURCE_LINE" >> "$ZSHRC"
+  cp "$ZSHRC" "$ZSHRC.bak-$(date +%Y%m%d-%H%M%S)" || die "could not back up $ZSHRC before adding the shell integration; left it untouched"
+  printf '\n# workytree shell integration\n%s\n' "$SOURCE_LINE" >> "$ZSHRC" || die "could not append the workytree source line to $ZSHRC (a backup was made)"
   echo "workytree: added shell integration to $ZSHRC (backup created)"
 fi
 
