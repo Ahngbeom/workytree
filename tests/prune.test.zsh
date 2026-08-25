@@ -128,7 +128,13 @@ EOF
 # expand_path collapses it to "/" -- prune_repo's own anchor guard must independently
 # refuse, unconditionally (before any filesystem walk of the real root -- the guard fires
 # before prune_repo even checks whether anything exists at the computed path).
-test_prune_anchor_refuses_worktree_root_that_resolves_to_filesystem_root() {
+# Fix round 2 update: require_config (R27/R30, layer 1) now catches "//" (resolves to "/")
+# before cmd_prune even calls resolve_repo/prune_repo -- a STRONGER invariant than round 1,
+# where this same config only got caught by prune_repo's own layer-2 anchor (exit 1). The
+# pure layer-2-independent-of-layer-1 proof now lives in tests/prune_internal.test.zsh
+# (which bypasses require_config entirely by calling prune_repo directly), since a real
+# config can no longer reach prune_repo in this state through the CLI at all.
+test_prune_worktree_root_that_resolves_to_root_is_refused_by_require_config() {
   make_repo "$HOME/src/widget"
   write_config <<EOF
 [project me]
@@ -137,8 +143,82 @@ worktree_root = //
 EOF
   local out; out="$(wt prune widget 2>&1)"
   local rc=$?
-  assert_eq "$rc" "1"
-  assert_contains "$out" "refusing to prune widget: project 'me' has no safe worktree_root"
+  assert_eq "$rc" "3"
+  assert_contains "$out" "project 'me' has an unsafe worktree_root (\"/\")"
+}
+
+# N-2: worktree_root = "/" is present, non-empty TEXT, but expand_path's trailing-slash
+# strip collapses it to "" -- this must NOT be reported as "missing worktree_root" (that
+# would misdescribe a value that is actually there).
+test_prune_worktree_root_literally_slash_gets_unusable_not_missing_message() {
+  make_repo "$HOME/src/app"
+  write_config <<EOF
+[project me]
+repo_root = ~/src
+worktree_root = /
+EOF
+  local out; out="$(wt prune app 2>&1)"
+  local rc=$?
+  assert_eq "$rc" "3"
+  assert_contains "$out" "project 'me' has an unusable worktree_root (\"/\")"
+  local saw_missing=0
+  [[ "$out" == *"is missing worktree_root"* ]] && saw_missing=1
+  assert_eq "$saw_missing" "0" "a present-but-unsafe value must not be reported as missing"
+}
+
+# R30/N-5: reproduce the reviewer's exact scenario -- worktree_root = ~/.. is a STRICT
+# ancestor of $HOME (not equal to it), and must be refused at config-validation time,
+# before prune ever runs.
+test_require_config_rejects_worktree_root_strict_ancestor_of_home() {
+  make_repo "$HOME/src/app"
+  write_config <<EOF
+[project me]
+repo_root = ~/src
+worktree_root = ~/..
+EOF
+  local out; out="$(wt prune 2>&1)"
+  local rc=$?
+  assert_eq "$rc" "3"
+  assert_contains "$out" "project 'me' has an unsafe worktree_root"
+  assert_contains "$out" "strict ancestor of the home directory"
+}
+
+# R30: the other half of the fix matters as much as the refusal -- worktree_root == $HOME
+# itself must stay fully usable, end-to-end: create a worktree under it, then prune while
+# it's live, and confirm nothing is refused and the worktree survives.
+test_worktree_root_equal_to_home_works_end_to_end() {
+  make_repo "$HOME/src/app"
+  write_config <<EOF
+[project me]
+repo_root = ~/src
+worktree_root = ~
+EOF
+  local create_out; create_out="$(wt create app fix HOMETEST main 2>&1)"
+  local -a lines; lines=(${(f)create_out})
+  local target="${lines[-1]}"
+  assert_eq "$target" "$HOME/app/fix/HOMETEST"
+  assert_dir "$target"
+  local out; out="$(wt prune app 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$out" "pruning worktrees for app"
+  assert_dir "$target"
+}
+
+# N-4: a <kind> dir holding ONLY a loose real file (never visited by the depth-2 loop,
+# since a FILE directly under <kind> isn't a depth-2 DIRECTORY) must still produce a
+# summary line -- an earlier version set `found=1` here but printed nothing at all.
+test_prune_reports_kind_dir_with_loose_real_file() {
+  fixture
+  mkdir -p "$HOME/wts/app/chore"
+  print "loose real content" > "$HOME/wts/app/chore/notes.txt"
+  local out; out="$(wt prune app 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$out" "skipped orphan kind dir with real files"
+  assert_dir "$HOME/wts/app/chore"
+  assert_eq "$(cat "$HOME/wts/app/chore/notes.txt")" "loose real content"
+  local saw_none=0
+  [[ "$out" == *"no orphan dirs found"* ]] && saw_none=1
+  assert_eq "$saw_none" "0" "a kind dir with real files must not ALSO claim no orphans were found"
 }
 
 test_prune_refuses_when_worktree_root_equals_repo_path() {

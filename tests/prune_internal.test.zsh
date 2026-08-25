@@ -93,4 +93,24 @@ test_prune_repo_refuses_when_worktree_list_shape_is_unexpected() {
   assert_eq "$(cat "$HOME/wts/app/fix/ORPHAN/.idea/a.xml")" "x"
 }
 
+# N-1: _prune_candidate_is_contained is a pure predicate -- `find`'s own output in
+# prune_repo can never actually feed it a candidate that escapes the roots (see the
+# comment on the function itself), so the only way to prove its LOGIC is correct is to
+# call it directly with a candidate string that lies outside the roots, exactly the way
+# the rest of this file already reaches prune_repo's other internals.
+test_prune_candidate_is_contained_rejects_escaping_candidate() {
+  assert_exit 1 _prune_candidate_is_contained "/outside/evil" "/wts/app" "/wts"
+}
+
+test_prune_candidate_is_contained_rejects_candidate_outside_configured_root_only() {
+  # Contained under repo_wt_root but NOT under the separately-configured root -- the second
+  # comparison exists specifically so repo_wt_root_canon itself being wrong (e.g. built from
+  # an escaping repo name) doesn't silently satisfy containment on its own.
+  assert_exit 1 _prune_candidate_is_contained "/wts/app/fix/T" "/wts/app" "/elsewhere"
+}
+
+test_prune_candidate_is_contained_accepts_real_candidate() {
+  assert_exit 0 _prune_candidate_is_contained "/wts/app/fix/T" "/wts/app" "/wts"
+}
+
 run_tests

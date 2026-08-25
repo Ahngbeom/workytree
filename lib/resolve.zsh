@@ -17,10 +17,37 @@ require_config() {
   # was reproduced end-to-end against an instrumented copy. Reject the missing invariant here,
   # for every command that reaches require_config, rather than downstream in each command that
   # happens to build a path from it.
-  local p
+  #
+  # N-2: "missing" and "present but unsafe" are different problems and get different
+  # wording. The raw config text is checked for presence FIRST, separately from the
+  # ~/$VAR-expanded value: `worktree_root = /` is non-empty TEXT, but expand_path's
+  # trailing-slash strip collapses it to "" -- reporting that as "missing worktree_root"
+  # would misdescribe a value that is actually present, just unusable.
+  #
+  # R30/N-5: worktree_root == $HOME is legal -- worktrees at ~/<repo>/<kind>/<ticket> is a
+  # reasonable, properly-contained layout -- but "/" or any STRICT ANCESTOR of $HOME is
+  # refused. R27's emptiness check above cannot catch this: the value is present and
+  # resolves to a non-empty path (e.g. "~/.."). Reproduced: worktree_root = ~/.. let
+  # prune's <kind> sweep reach real directories (an empty dir and a .DS_Store-only dir)
+  # directly under $HOME.
+  local p raw_root raw_wt wt_root wt_canon home_canon
+  home_canon="${HOME:A}"
   for p in "${WT_PROJECTS[@]}"; do
-    [[ -n "$(project_repo_root "$p")" ]] || { error "project '$p' is missing repo_root in $WT_CONFIG_FILE"; exit 3; }
-    [[ -n "$(project_worktree_root "$p")" ]] || { error "project '$p' is missing worktree_root in $WT_CONFIG_FILE"; exit 3; }
+    raw_root="${WT_PCFG[$p.repo_root]:-}"
+    raw_wt="${WT_PCFG[$p.worktree_root]:-}"
+    [[ -n "$raw_root" ]] || { error "project '$p' is missing repo_root in $WT_CONFIG_FILE"; exit 3; }
+    [[ -n "$raw_wt"   ]] || { error "project '$p' is missing worktree_root in $WT_CONFIG_FILE"; exit 3; }
+    [[ -n "$(project_repo_root "$p")" ]] || {
+      error "project '$p' has an unusable repo_root (\"$raw_root\") in $WT_CONFIG_FILE"; exit 3; }
+    wt_root="$(project_worktree_root "$p")"
+    if [[ -z "$wt_root" ]]; then
+      error "project '$p' has an unusable worktree_root (\"$raw_wt\") in $WT_CONFIG_FILE"; exit 3
+    fi
+    wt_canon="${wt_root:A}"
+    if [[ "$wt_canon" == "/" || "$home_canon" == "$wt_canon"/* ]]; then
+      error "project '$p' has an unsafe worktree_root (\"$wt_canon\"): refusing \"/\" or a strict ancestor of the home directory (\"$home_canon\")"
+      exit 3
+    fi
   done
   if [[ -n "$WT_PROJECT_OPT" ]] && ! project_exists "$WT_PROJECT_OPT"; then
     die "unknown project: $WT_PROJECT_OPT (run 'workytree project list')"

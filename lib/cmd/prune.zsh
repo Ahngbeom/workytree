@@ -1,3 +1,18 @@
+# _prune_candidate_is_contained <candidate_canon> <root_a> <root_b>: true only if
+# candidate_canon lies strictly under BOTH roots. N-1: pulled out of the sweep loops as its
+# own function specifically so it can be driven directly by a test with a candidate string
+# that lies outside the roots -- `find`'s own output in this file can never actually produce
+# such a candidate (see the note at each call site: no `-L` is used anywhere below, and
+# `-type d` never matches a symlink under find's default `-P` behavior, confirmed
+# empirically -- a symlinked <kind> component is neither listed nor descended into), so a
+# test that only drives prune_repo end-to-end could never reach the "candidate escaped"
+# branch of this predicate. Calling it directly, the same way tests/prune_internal.test.zsh
+# already reaches prune_repo's other internals, is what makes it provable at all.
+_prune_candidate_is_contained() {
+  local candidate="$1" root_a="$2" root_b="$3"
+  [[ "$candidate" == "$root_a"/* && "$candidate" == "$root_b"/* ]]
+}
+
 # prune_repo <project> <repo> <repo_path>: clears git's stale worktree registrations for
 # <repo_path>, then sweeps <worktree_root>/<repo>/<kind>/<ticket> (depth 2) for directories
 # that are NOT registered as live worktrees, deleting one only when dir_is_cruft_only
@@ -107,10 +122,11 @@ prune_repo() {
     [[ -n "$dir" ]] || continue
     dir_canon="${dir:A}"
     # Containment guard: the candidate must actually resolve under BOTH repo_wt_root_canon
-    # and the configured root directly. find's -mindepth/-maxdepth already scoped the walk,
-    # but a symlinked child could canonicalize somewhere else entirely -- never let the
-    # loop's shape alone decide what gets deleted.
-    [[ "$dir_canon" == "$repo_wt_root_canon"/* && "$dir_canon" == "$configured_wt_root_canon"/* ]] || continue
+    # and the configured root directly. find's -mindepth/-maxdepth already scoped the walk
+    # (using default -P behavior -- no -L flag -- so a symlinked <kind>/<ticket> component
+    # is never even listed, let alone descended into; verified empirically), but never let
+    # the loop's shape alone decide what gets deleted -- see _prune_candidate_is_contained.
+    _prune_candidate_is_contained "$dir_canon" "$repo_wt_root_canon" "$configured_wt_root_canon" || continue
     [[ -n "${registered[$dir_canon]:-}" ]] && continue
     found=1
     if dir_is_cruft_only "$dir"; then
@@ -133,7 +149,7 @@ prune_repo() {
   while IFS= read -r -d '' kdir; do
     [[ -n "$kdir" ]] || continue
     kdir_canon="${kdir:A}"
-    [[ "$kdir_canon" == "$repo_wt_root_canon"/* && "$kdir_canon" == "$configured_wt_root_canon"/* ]] || continue
+    _prune_candidate_is_contained "$kdir_canon" "$repo_wt_root_canon" "$configured_wt_root_canon" || continue
     keep=0
     for w in "${(@k)registered}"; do
       [[ "$w" == "$kdir_canon"/* ]] && { keep=1; break; }
@@ -146,6 +162,13 @@ prune_repo() {
       else
         error "  failed to remove orphan kind dir (left in place): $kdir"
       fi
+    else
+      # N-4: every path that sets `found` must also say something -- an earlier version
+      # left this branch silent, so a <kind> dir holding only a loose real file (never
+      # visited by the depth-2 loop above, since a FILE directly under <kind> isn't a
+      # depth-2 DIRECTORY) made `wt prune` print no summary line at all: not "removed",
+      # not "skipped orphan", not even "no orphan dirs found" (found was already 1).
+      warn "  skipped orphan kind dir with real files (remove manually if intended): $kdir"
     fi
   done < <(find "$repo_wt_root" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
 
