@@ -67,4 +67,49 @@ test_create_unknown_repo_outside_project() {
   assert_exit 1 wt create ghost fix T
 }
 
+# R21: a stale plain directory sitting at the target path is not a worktree and must not be
+# reported as "reused" -- create_do has to verify the path is actually registered against
+# $repo_path via `git worktree list`, not just check -e.
+test_create_stale_plain_dir_at_target_is_not_reused() {
+  fixture
+  mkdir -p "$HOME/wts/app/fix/STALE1"
+  local out; out="$(wt create app fix STALE1 main 2>&1)"
+  assert_eq "$?" 1
+  assert_contains "$out" "workytree: target path exists but is not a worktree of"
+  assert_contains "$out" "STALE1"
+}
+
+# R21, inverse-of-above: a plain FILE at the target is the same bug, not just a directory.
+test_create_stale_plain_file_at_target_is_not_reused() {
+  fixture
+  mkdir -p "$HOME/wts/app/fix"
+  print "junk" > "$HOME/wts/app/fix/STALE2"
+  local out; out="$(wt create app fix STALE2 main 2>&1)"
+  assert_eq "$?" 1
+  assert_contains "$out" "workytree: target path exists but is not a worktree of"
+}
+
+# R21: pins the CURRENT behavior for the inverse case (a worktree git still has registered,
+# but whose directory was deleted from disk) so a later change cannot silently regress it into
+# something worse than a clearly-diagnosed, workytree-prefixed failure.
+test_create_missing_but_registered_worktree_fails_loudly() {
+  fixture
+  wt create app fix GONE main >/dev/null
+  rm -rf "$HOME/wts/app/fix/GONE"
+  local out; out="$(wt create app fix GONE main 2>&1)"
+  assert_eq "$?" 1
+  assert_contains "$out" "workytree: failed to create worktree"
+}
+
+# R22: a base ref containing a space must never be silently truncated by splitting a display
+# label -- it either reaches git intact (and git rejects the invalid ref, loudly) or the create
+# fails; either way "main" alone must never be what gets used.
+test_create_base_ref_with_space_is_not_silently_truncated() {
+  fixture
+  local out; out="$(wt create app chore SPC "main extra-junk" 2>&1)"
+  assert_eq "$?" 1
+  assert_contains "$out" "main extra-junk"
+  assert_not_exists "$HOME/wts/app/chore/SPC"
+}
+
 run_tests
