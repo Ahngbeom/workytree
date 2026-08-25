@@ -39,7 +39,7 @@ test_repos_lists_registered_then_scanned() {
 
 test_scan_depth_limits_discovery() {
   fixture
-  wt config set project.fd.scan_depth 1
+  wt config set project.fd.scan_depth 1 >/dev/null
   local out; out="$(wt repos)"
   assert_eq "${out//server/}" "$out" "server must not be found at depth 1"
 }

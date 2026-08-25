@@ -13,7 +13,11 @@ typeset -g WT_FAIL_FILE="${TMPDIR:-/tmp}/wt-test-fail.$$"
 : > "$WT_FAIL_FILE"
 
 setup_env() {
-  TMP_ROOT="$(mktemp -d)"
+  # Resolve to the physical path: macOS's mktemp -d lands under /var/folders, and /var is
+  # itself a symlink to /private/var. Tools that canonicalize cwd (e.g. `git rev-parse
+  # --show-toplevel`) would otherwise report a path that disagrees with $HOME textually
+  # while naming the same directory.
+  TMP_ROOT="${$(mktemp -d):A}"
   export HOME="$TMP_ROOT/home"
   export XDG_CONFIG_HOME="$HOME/.config"
   mkdir -p "$HOME" "$XDG_CONFIG_HOME"
