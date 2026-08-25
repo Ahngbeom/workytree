@@ -1,6 +1,14 @@
 # Repo/project resolution. Order: registered [repo] alias -> scan of every [project].repo_root -> cwd inference.
 
 require_config() {
+  # R38: a config file that exists but failed to PARSE (config_load recorded
+  # WT_CONFIG_LOAD_ERROR instead of dying, so __complete/config-path/config-edit can still
+  # run) is a harder failure than "no config" or "no [project]" below -- surface the parse
+  # failure itself, with the same message config_load would have died with, at the same
+  # exit code (3) this function already uses to describe "the config file is unusable".
+  if [[ -n "$WT_CONFIG_LOAD_ERROR" ]]; then
+    error "$WT_CONFIG_LOAD_ERROR"; exit 3
+  fi
   if (( !WT_CONFIG_EXISTS )); then
     error "no config found at $WT_CONFIG_FILE"; error "run 'workytree init' to create one"; exit 3
   fi

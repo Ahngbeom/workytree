@@ -5,8 +5,22 @@
 # section header. Writes (config_set/config_unset/config_remove_section) write through a
 # symlinked config file rather than replacing the link, and normalize the whole file to LF line
 # endings even when the original used CRLF.
+#
+# R38: a config file that fails to PARSE (duplicate key/section, an unparseable line) does
+# NOT die() here. bin/workytree's main() calls config_load() unconditionally, before any
+# command-specific code -- including __complete -- ever gets control, so a die() here would
+# kill Tab completion (and `config path`/`config edit`, the very commands that could repair
+# the file) on every keystroke against a broken config. Instead the failure is RECORDED in
+# WT_CONFIG_LOAD_ERROR (empty = no failure) and every array is reset to empty, exactly as if
+# the config had no usable content -- config_load() itself never exits the process. Callers
+# that need a loaded config to do their job (require_config, `config get`/`set`) check
+# WT_CONFIG_LOAD_ERROR and refuse loudly with this same message; callers that can legitimately
+# run against absent/empty config data (`__complete`, `config path`, `config edit`, `help`,
+# `--version`) don't need to check it at all -- reset-to-empty already gives them the
+# "produce nothing, don't crash" behavior they want.
 typeset -g  WT_CONFIG_FILE=""
 typeset -gi WT_CONFIG_EXISTS=0
+typeset -g  WT_CONFIG_LOAD_ERROR=""
 typeset -gA WT_CFG WT_PCFG WT_RCFG
 typeset -ga WT_PROJECTS WT_REPOS
 
@@ -55,11 +69,24 @@ _config_strip_comment() {
   print -r -- "${line%%[[:space:]]##\#*}"
 }
 
+# _config_load_fail <message>: records a parse failure (R38) in WT_CONFIG_LOAD_ERROR and
+# discards every array back to empty -- a config that failed to parse gets treated as having
+# NO usable content by any consumer that doesn't explicitly check WT_CONFIG_LOAD_ERROR,
+# rather than the partial/inconsistent state parsing had reached at the point of failure.
+# WT_CONFIG_EXISTS is deliberately left untouched: it is file-EXISTENCE, not
+# file-VALIDITY, and callers like `cmd_init` rely on that distinction to keep refusing a
+# broken-but-present config rather than silently overwriting it.
+_config_load_fail() {
+  WT_CONFIG_LOAD_ERROR="$1"
+  WT_CFG=() WT_PCFG=() WT_RCFG=() WT_PROJECTS=() WT_REPOS=()
+}
+
 config_load() {
   setopt localoptions extendedglob
   WT_CONFIG_FILE="$(config_file_path)"
   WT_CFG=() WT_PCFG=() WT_RCFG=() WT_PROJECTS=() WT_REPOS=()
   WT_CONFIG_EXISTS=0
+  WT_CONFIG_LOAD_ERROR=""
   [[ -f "$WT_CONFIG_FILE" ]] || return 0
   WT_CONFIG_EXISTS=1
   local raw line lineno=0 sect_type="" sect_name="" key value
@@ -72,10 +99,14 @@ config_load() {
       sect_type="$match[1]"
       sect_name="${${match[2]##[[:space:]]#}%%[[:space:]]#}"
       if [[ "$sect_type" == project ]]; then
-        (( ${WT_PROJECTS[(Ie)$sect_name]} )) && die "duplicate [project $sect_name] at $WT_CONFIG_FILE:$lineno"
+        if (( ${WT_PROJECTS[(Ie)$sect_name]} )); then
+          _config_load_fail "duplicate [project $sect_name] at $WT_CONFIG_FILE:$lineno"; return 1
+        fi
         WT_PROJECTS+=("$sect_name")
       else
-        (( ${WT_REPOS[(Ie)$sect_name]} )) && die "duplicate [repo $sect_name] at $WT_CONFIG_FILE:$lineno"
+        if (( ${WT_REPOS[(Ie)$sect_name]} )); then
+          _config_load_fail "duplicate [repo $sect_name] at $WT_CONFIG_FILE:$lineno"; return 1
+        fi
         WT_REPOS+=("$sect_name")
       fi
       seen_keys=()
@@ -83,7 +114,9 @@ config_load() {
     fi
     if [[ "$line" =~ '^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$' ]]; then
       key="$match[1]" value="${match[2]%%[[:space:]]#}"
-      (( ${+seen_keys[$key]} )) && die "duplicate key $key at $WT_CONFIG_FILE:$lineno"
+      if (( ${+seen_keys[$key]} )); then
+        _config_load_fail "duplicate key $key at $WT_CONFIG_FILE:$lineno"; return 1
+      fi
       seen_keys[$key]=1
       case "$sect_type" in
         "")      WT_CFG[$key]="$value" ;;
@@ -92,7 +125,7 @@ config_load() {
       esac
       continue
     fi
-    die "config parse error at $WT_CONFIG_FILE:$lineno: $line"
+    _config_load_fail "config parse error at $WT_CONFIG_FILE:$lineno: $line"; return 1
   done < "$WT_CONFIG_FILE"
 }
 

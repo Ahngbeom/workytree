@@ -236,4 +236,78 @@ test_expand_path_self_reference_does_not_hang() {
   assert_eq "$out" '$SELFREF'
 }
 
+# R38 (fix round 1 of Task 11): a config that fails to PARSE (duplicate key/section, an
+# unparseable line) must not die() inside config_load() -- bin/workytree's main() calls
+# config_load() before ANY command, including __complete, ever gets control, so a die()
+# there would kill Tab completion (and `config path`/`config edit`, the very commands that
+# could repair the file) on every keystroke against a broken config. config_load() instead
+# records the failure in WT_CONFIG_LOAD_ERROR and resets every array to empty;
+# require_config and `config get`/`set` must surface it loudly (same message, same
+# "config:N"), while __complete/`config path`/`config edit`/help/--version must keep
+# working. R23: a passing exit-code assertion alone would not catch a consumer that
+# silently treats a broken config as an absent one (the exact defect this fix addresses --
+# `config get` on an empty WT_CFG also exits 1, just with the WRONG message), so every
+# "must surface loudly" case below asserts on the "config:N" message text too, not only the
+# exit code.
+_broken_config() {
+  write_config <<'EOF'
+kinds = a
+kinds = b
+EOF
+}
+
+test_broken_config_complete_is_silent() {
+  _broken_config
+  local errfile; errfile="$(mktemp)"
+  local out; out="$(wt __complete commands 2>"$errfile")"
+  assert_eq "$?" "0"
+  assert_contains "$out" "create"
+  assert_eq "$(cat "$errfile")" ""
+
+  out="$(wt __complete repos 2>"$errfile")"
+  assert_eq "$?" "0"
+  assert_eq "$out" ""
+  assert_eq "$(cat "$errfile")" ""
+  rm -f "$errfile"
+}
+
+test_broken_config_path_and_edit_still_work() {
+  _broken_config
+  assert_eq "$(wt config path)" "$XDG_CONFIG_HOME/workytree/config"
+  local out; out="$(EDITOR=cat wt config edit)"
+  assert_eq "$?" "0"
+  assert_eq "$out" $'kinds = a\nkinds = b'
+}
+
+test_broken_config_help_and_version_still_work() {
+  _broken_config
+  assert_exit 0 wt help
+  assert_contains "$(wt --version)" "workytree"
+}
+
+test_broken_config_require_config_command_exits_3_with_message() {
+  _broken_config
+  local out; out="$(wt list 2>&1)"
+  assert_eq "$?" "3"
+  assert_contains "$out" "config:2"
+}
+
+test_broken_config_get_and_set_exit_1_with_message() {
+  _broken_config
+  local out; out="$(wt config get kinds 2>&1)"
+  assert_eq "$?" "1"
+  assert_contains "$out" "config:2"
+
+  out="$(wt config set foo bar 2>&1)"
+  assert_eq "$?" "1"
+  assert_contains "$out" "config:2"
+}
+
+test_broken_config_init_still_refuses() {
+  _broken_config
+  local out; out="$(wt init x ~/a ~/b 2>&1)"
+  assert_eq "$?" "1"
+  assert_contains "$out" "config already exists"
+}
+
 run_tests
