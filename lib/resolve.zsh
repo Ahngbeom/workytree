@@ -38,22 +38,45 @@ registered_repos() {
   done
 }
 
+
+# all_repos <filter>: emits one "name\tproject\tpath" row per PHYSICAL repo, never two. A
+# registered [repo] alias always wins over anything scanned (matching resolve_repo's own
+# precedence); among scanned candidates for the same physical repo (nested/overlapping
+# repo_roots), project_of_path's longest-prefix rule picks the winner -- see R18.
 all_repos() {
-  local filter="${1:-}" p
-  { registered_repos "$filter"
-    for p in "${WT_PROJECTS[@]}"; do
-      [[ -n "$filter" && "$p" != "$filter" ]] && continue
-      scan_project_repos "$p"
-    done
-  } | awk -F'\t' '!seen[$1 FS $3]++'
+  local filter="${1:-}" p n rp rpath phys winner idx
+  local -a out out_phys out_registered
+  while IFS=$'\t' read -r n rp rpath; do
+    out+=("$n"$'\t'"$rp"$'\t'"$rpath")
+    out_phys+=("${rpath:A}")
+    out_registered+=(1)
+  done < <(registered_repos "$filter")
+  for p in "${WT_PROJECTS[@]}"; do
+    [[ -n "$filter" && "$p" != "$filter" ]] && continue
+    while IFS=$'\t' read -r n rp rpath; do
+      phys="${rpath:A}"
+      idx=${out_phys[(Ie)$phys]}
+      if (( idx )); then
+        (( out_registered[idx] )) && continue
+        winner="$(project_of_path "$phys")"
+        [[ "$winner" == "$rp" ]] && out[idx]="$n"$'\t'"$rp"$'\t'"$rpath"
+        continue
+      fi
+      out+=("$n"$'\t'"$rp"$'\t'"$rpath")
+      out_phys+=("$phys")
+      out_registered+=(0)
+    done < <(scan_project_repos "$p")
+  done
+  local o
+  for o in "${out[@]}"; do print -r -- "$o"; done
 }
 
 is_known_repo() { all_repos "$WT_PROJECT_OPT" | cut -f1 | grep -qx -- "$1"; }
 
 # resolve_repo <name> [project] -> "project\tpath"
 resolve_repo() {
-  local name="$1" filter="${2:-$WT_PROJECT_OPT}" p rn rp rpath line
-  local -a matches
+  local name="$1" filter="${2:-$WT_PROJECT_OPT}" p rn rp rpath line phys winner idx
+  local -a matches matches_phys
   if (( ${WT_REPOS[(Ie)$name]} )); then
     p="${WT_RCFG[$name.project]:-}"
     if [[ -z "$filter" || "$p" == "$filter" ]]; then
@@ -63,7 +86,19 @@ resolve_repo() {
   for p in "${WT_PROJECTS[@]}"; do
     [[ -n "$filter" && "$p" != "$filter" ]] && continue
     while IFS=$'\t' read -r rn rp rpath; do
-      [[ "$rn" == "$name" ]] && matches+=("$rp"$'\t'"$rpath")
+      [[ "$rn" == "$name" ]] || continue
+      # Collapse candidates naming the same PHYSICAL repo (nested/overlapping repo_roots):
+      # the project whose repo_root is the longest matching prefix wins. Reuse
+      # project_of_path's own longest-prefix rule instead of re-deriving it here (R18).
+      phys="${rpath:A}"
+      idx=${matches_phys[(Ie)$phys]}
+      if (( idx )); then
+        winner="$(project_of_path "$phys")"
+        [[ "$winner" == "$rp" ]] && matches[idx]="$rp"$'\t'"$rpath"
+      else
+        matches+=("$rp"$'\t'"$rpath")
+        matches_phys+=("$phys")
+      fi
     done < <(scan_project_repos "$p")
   done
   case ${#matches} in
