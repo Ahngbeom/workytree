@@ -33,27 +33,40 @@ echo "workytree: linked $BIN_DIR/workytree"
 
 SOURCE_LINE="[ -s \"$INSTALL_DIR/shell/workytree.zsh\" ] && source \"$INSTALL_DIR/shell/workytree.zsh\""
 touch "$ZSHRC"
-# R47: the old dedup check (`grep -F "shell/workytree.zsh"`) matched that substring ANYWHERE
-# in the file, so a line already sourcing workytree from a DIFFERENT install dir counted as
-# "already sources" -- reinstalling to a new WORKYTREE_INSTALL_DIR then silently left the
-# shell pointed at the old, possibly-now-deleted location, with no sign anything was wrong
-# until that old path stopped existing. Check for an EXACT match of the line THIS run would
-# write (-Fx: whole-line, fixed-string) first -- that, and only that, means "already correct,
-# nothing to do". A broader match on the bare substring still means "some workytree source
-# line exists here", but if it isn't the exact one above it must be stale (a prior install
-# elsewhere): replace it in place -- along with the header comment this installer always
-# pairs it with -- rather than leaving the dangling old line, or appending a second workytree
-# source line next to it (either of which would source workytree twice, or leave a footgun
-# for whichever path happens to still exist on disk).
+# R48: R47's replace-a-stale-path fix matched any line CONTAINING "shell/workytree.zsh" --
+# which also matches prose mentioning the path, an unrelated alias quoting it, or (worst)
+# a line the user deliberately COMMENTED OUT, silently deleting the first two and
+# reactivating the third as a live line. Match the exact SHAPE this installer itself
+# writes instead -- "[ -s "<path>/shell/workytree.zsh" ] && source
+# "<path>/shell/workytree.zsh"", for any <path> -- not a bare substring, so a line has to
+# structurally BE one of our own source statements (active or commented-out) before this
+# script will touch it. Anything that merely mentions the path in some other shape is left
+# alone, unconditionally, and reported rather than silently skipped.
+ACTIVE_RE='^[[:space:]]*\[ -s "[^"]*shell/workytree\.zsh" \] && source "[^"]*shell/workytree\.zsh"[[:space:]]*$'
+DISABLED_RE='^[[:space:]]*#[[:space:]]*\[ -s "[^"]*shell/workytree\.zsh" \] && source "[^"]*shell/workytree\.zsh"[[:space:]]*$'
 if grep -Fxq "$SOURCE_LINE" "$ZSHRC"; then
   echo "workytree: $ZSHRC already sources the shell integration"
-elif grep -Fq "shell/workytree.zsh" "$ZSHRC"; then
+elif grep -Eq "$ACTIVE_RE" "$ZSHRC"; then
+  # A DIFFERENT active source line exists (R47) -- replace it (and the header comment this
+  # installer always pairs with it) rather than leaving it stale or appending a duplicate
+  # live line. -E, matching ACTIVE_RE's shape, so only a genuine source statement is ever
+  # removed here -- never prose, an alias, or a commented-out line (DISABLED_RE, checked
+  # below, is a superset match that would also hit ACTIVE_RE if not excluded by the elif
+  # ordering: an active line is matched here first and never falls through).
   cp "$ZSHRC" "$ZSHRC.bak-$(date +%Y%m%d-%H%M%S)"
-  grep -v -e 'shell/workytree\.zsh' -e '^# workytree shell integration$' "$ZSHRC" > "$ZSHRC.tmp"
+  grep -Ev -e "$ACTIVE_RE" -e '^# workytree shell integration$' "$ZSHRC" > "$ZSHRC.tmp"
   mv "$ZSHRC.tmp" "$ZSHRC"
   printf '\n# workytree shell integration\n%s\n' "$SOURCE_LINE" >> "$ZSHRC"
-  echo "workytree: $ZSHRC sourced workytree from a different location; updated it to point at $INSTALL_DIR (backup created)"
+  echo "workytree: $ZSHRC sourced workytree from a different location; replaced that line with one pointing at $INSTALL_DIR (backup created)"
+elif grep -Eq "$DISABLED_RE" "$ZSHRC"; then
+  # The user commented this out on purpose -- never silently reactivate it, and never add a
+  # second, live line next to it without saying so (R48). Leave the file untouched (no
+  # backup: nothing was written) and name what was found so the user can decide.
+  echo "workytree: $ZSHRC has a commented-out workytree source line; leaving it disabled as you left it (not adding a live one) -- edit $ZSHRC yourself to re-enable or replace it"
 else
+  if grep -Fq "shell/workytree.zsh" "$ZSHRC"; then
+    echo "workytree: note -- $ZSHRC mentions \"shell/workytree.zsh\" on a line that isn't a workytree source statement; leaving that line untouched"
+  fi
   cp "$ZSHRC" "$ZSHRC.bak-$(date +%Y%m%d-%H%M%S)"
   printf '\n# workytree shell integration\n%s\n' "$SOURCE_LINE" >> "$ZSHRC"
   echo "workytree: added shell integration to $ZSHRC (backup created)"
