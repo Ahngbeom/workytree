@@ -44,7 +44,7 @@ require_config() {
       error "project '$p' has an unusable worktree_root (\"$raw_wt\") in $WT_CONFIG_FILE"; exit 3
     fi
     wt_canon="${wt_root:A}"
-    if [[ "$wt_canon" == "/" || "$home_canon" == "$wt_canon"/* ]]; then
+    if ! is_safe_worktree_root "$wt_canon" "$home_canon"; then
       error "project '$p' has an unsafe worktree_root (\"$wt_canon\"): refusing \"/\" or a strict ancestor of the home directory (\"$home_canon\")"
       exit 3
     fi
@@ -67,6 +67,17 @@ require_config() {
 is_safe_repo_name() {
   local n="$1"
   [[ -n "$n" && "$n" != "." && "$n" != ".." && "$n" != */* ]]
+}
+
+# is_safe_worktree_root <canonicalized-path> [home_canon]: false for "/" or a STRICT
+# ancestor of $HOME; worktree_root == $HOME itself is legal (see the R30/N-5 note on
+# require_config above -- this is the single source of that rule, shared by require_config
+# and by `workytree project add`'s own up-front validation so the two can never drift).
+# <canonicalized-path> must already be run through ":A" by the caller; home_canon is
+# likewise expected pre-canonicalized and defaults to "${HOME:A}" when omitted.
+is_safe_worktree_root() {
+  local wt_canon="$1" home_canon="${2:-${HOME:A}}"
+  [[ "$wt_canon" != "/" && "$home_canon" != "$wt_canon"/* ]]
 }
 
 project_exists()        { (( ${WT_PROJECTS[(Ie)$1]} )); }
