@@ -24,21 +24,28 @@ worktree_status() { git -C "$1" status --porcelain --untracked-files=normal 2>/d
 #                that is actually incomplete. R24: "cannot determine" must never be treated
 #                as clean, or as merely "dirty" (that would still auto-discard it as
 #                idea-only) -- callers must refuse outright and say so.
-# Sets WT_DIRT_DETAIL to the porcelain listing (kind clean/idea-only/real) or a one-line
-# failure reason (kind unknown), for callers that want to show the user why.
-typeset -g WT_DIRT_DETAIL=''
+# Sets WT_DIRT_DETAIL and WT_DIRT_RC for callers that want to show the user why:
+#   kind clean/idea-only/real -> WT_DIRT_DETAIL is the porcelain listing, WT_DIRT_RC=0.
+#   kind unknown               -> WT_DIRT_DETAIL is git's raw (possibly multi-line) stderr
+#                                  (or, in the rare case git exited nonzero with nothing on
+#                                  stderr, an empty string), WT_DIRT_RC is git's exit code.
+# R26: callers must show this stderr verbatim rather than squash/summarize it -- a benign
+# warning (e.g. an overly long .gitattributes line) and a real problem look identical once
+# reduced to "git status exited 0", so the raw text is what lets a user tell them apart.
+typeset -g WT_DIRT_DETAIL='' WT_DIRT_RC=0
 _worktree_dirt_kind() {
   # R16: never name a local `path` -- even `local path` silently destroys $PATH for the
   # rest of this scope, so `git`/`mktemp` below would vanish with no visible error.
   local err_file rc err out line entry
-  WT_DIRT_DETAIL=''
-  err_file="$(mktemp 2>/dev/null)" || { REPLY=unknown; WT_DIRT_DETAIL="could not allocate a temp file to check git status"; return; }
+  WT_DIRT_DETAIL='' WT_DIRT_RC=0
+  err_file="$(mktemp 2>/dev/null)" || { REPLY=unknown; WT_DIRT_DETAIL="(could not allocate a temp file to check git status)"; return; }
   out="$(git -C "$1" status --porcelain --untracked-files=normal 2>"$err_file")"; rc=$?
   err="$(<"$err_file" 2>/dev/null)"
   rm -f "$err_file"
   if (( rc != 0 )) || [[ -n "$err" ]]; then
     REPLY=unknown
-    WT_DIRT_DETAIL="git status exited $rc${err:+: ${err//$'\n'/ }}"
+    WT_DIRT_RC=$rc
+    WT_DIRT_DETAIL="$err"
     return
   fi
   if [[ -z "$out" ]]; then REPLY=clean; return; fi

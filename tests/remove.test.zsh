@@ -74,6 +74,27 @@ test_remove_dirty_submodule_requires_force() {
   assert_not_exists "$WT"
 }
 
+# N1: pin the fail-closed status-verification guard itself (_worktree_dirt_kind's "unknown"
+# classification) -- an unreadable subdirectory makes `git status` exit 0 while only
+# warning on stderr, so this guard is the only thing standing between a chmod-000
+# subdirectory holding real work and deletion. The subdirectory's permissions are restored
+# BEFORE any assertion runs, so a failing assertion can never leave teardown_env unable to
+# rm -rf it.
+test_remove_unverifiable_status_refuses() {
+  fixture
+  mkdir "$WT/hidden"
+  print "real work git cannot see" > "$WT/hidden/work.txt"
+  git -C "$WT" add -A && git -C "$WT" commit -qm "add hidden dir"
+  print "more real work" >> "$WT/hidden/work.txt"
+  chmod 000 "$WT/hidden"
+  local out; out="$(wt remove app fix T 2>&1)"
+  local rc=$?
+  chmod 755 "$WT/hidden"
+  assert_eq "$rc" 1
+  assert_contains "$out" "could not verify worktree status"
+  assert_dir "$WT"
+}
+
 test_remove_idea_only_is_discarded() {
   fixture; mkdir "$WT/.idea"; print x > "$WT/.idea/ws.xml"
   assert_contains "$(wt remove app fix T 2>&1)" "IDE state"

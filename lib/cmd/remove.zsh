@@ -1,3 +1,18 @@
+# _wt_indent_and_cap <text>: format git's raw stderr for a refusal message -- indent every
+# line by 2 spaces (readable inside a larger message) and cap it at 20 lines (git chatter
+# from e.g. a corrupt index can run long; the point is to show enough for a user to tell a
+# benign warning from a real problem, not to dump everything). Empty input gets a
+# placeholder so the message never ends with a dangling ": ".
+_wt_indent_and_cap() {
+  local text="$1"
+  [[ -z "$text" ]] && { print -r -- "  (git produced no diagnostic output)"; return; }
+  local -a lines; lines=("${(@f)text}")
+  local -i total=${#lines}
+  (( total > 20 )) && lines=("${lines[@]:0:20}" "... (truncated, ${total} lines total)")
+  local l
+  for l in "${lines[@]}"; do print -r -- "  $l"; done
+}
+
 # remove_branch <repo_path> <branch> <force>: best-effort branch delete after the worktree
 # using it is already gone. The branch name must be captured by the caller BEFORE removing
 # the worktree — `git branch --show-current` needs the worktree to still exist.
@@ -63,8 +78,21 @@ cmd_remove() {
 
   local -i idea_only=0
   if [[ "$dirt_kind" == unknown ]]; then
-    (( force_remove )) || die "could not verify worktree status ($WT_DIRT_DETAIL); refusing without --force"
-    warn "worktree status could not be verified ($WT_DIRT_DETAIL); proceeding only because --force was given"
+    # R26: do not narrow the fail-closed rule (a benign warning and a real problem both
+    # reduce to "git status exited nonzero or wrote to stderr", and any allowlist to tell
+    # them apart is brittle across git versions/locales) -- instead make the refusal
+    # honest. Show git's actual stderr so the user can judge for themselves, and don't
+    # claim --force will fix anything: for a chmod-000 subdirectory it won't (`git
+    # worktree remove --force` still can't unlink through a directory it can't read), so
+    # promising that remedy would be a lie the user discovers the hard way.
+    if (( force_remove )); then
+      warn "could not verify worktree status (git status exited $WT_DIRT_RC); proceeding only because --force was given. git said:"
+      _wt_indent_and_cap "$WT_DIRT_DETAIL"
+    else
+      die $'could not verify worktree status (git status exited '"$WT_DIRT_RC"$'); refusing to guess whether it is safe to remove. git said:
+'"$(_wt_indent_and_cap "$WT_DIRT_DETAIL")"$'
+(--force overrides this refusal, but may not resolve the underlying problem)'
+    fi
   elif [[ "$dirt_kind" == real ]] || has_dirty_submodule "$target"; then
     (( force_remove )) || die "worktree has changes outside .idea/ (or a dirty submodule); use --force to remove"
   elif [[ "$dirt_kind" == idea-only ]]; then
