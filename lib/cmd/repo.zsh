@@ -29,13 +29,26 @@ cmd_repo() {
         esac; shift
       done
       [[ -n "$repo_path" ]] || usage_error "usage: workytree repo add <path> [--name n] [--project p]"
-      repo_path="$(expand_path "$repo_path")"; repo_path="${repo_path:A}"
+      repo_path="$(expand_path "$repo_path")"
+      # Captured BEFORE the ":A" canonicalization below, so a symlinked path (e.g.
+      # "~/proj-link" pointing at ".../proj") can be compared against what the user actually
+      # typed -- see the name-derivation note further down.
+      local typed_basename="${repo_path:t}"
+      repo_path="${repo_path:A}"
 
       # Verify the path really is a git repo BEFORE anything else -- registering a
       # non-repo would make every later command that resolves this name (path/create/prune)
       # fail confusingly deep inside `git -C ...` instead of here, with our own wording.
       git -C "$repo_path" rev-parse --git-dir >/dev/null 2>&1 || die "not a git repository: $repo_path"
 
+      # A symlinked path derives its default name from the CANONICALIZED target's basename
+      # (repo_path is already ":A"-resolved above), not the symlink name the user typed --
+      # "~/proj-link" -> "[repo proj]". The behavior is kept (the physical repo, not the
+      # symlink, is what's actually being registered) but is called out in the success
+      # message below when it differs and the user didn't pin the name explicitly with
+      # --name.
+      local name_explicit=0
+      [[ -n "$name" ]] && name_explicit=1
       [[ -n "$name" ]] || name="${repo_path:t}"
       # R29: is_safe_repo_name is the authoritative check -- NOT a character-class glob like
       # "[A-Za-z0-9_.-]##". That class would wrongly ACCEPT "..", since both characters it
@@ -58,7 +71,11 @@ cmd_repo() {
 
       config_set "repo.$name.path" "$repo_path"
       config_set "repo.$name.project" "$project"
-      success "registered repo $name → $repo_path (project $project)" ;;
+      local note=""
+      if (( ! name_explicit )) && [[ "$name" != "$typed_basename" ]]; then
+        note=" (name derived from the resolved target \"$name\", not the symlink \"$typed_basename\" you typed)"
+      fi
+      success "registered repo $name → $repo_path (project $project)$note" ;;
     remove)
       (( $# == 1 )) || usage_error "usage: workytree repo remove <name>"
       (( ${WT_REPOS[(Ie)$1]} )) || die "repo not registered: $1"

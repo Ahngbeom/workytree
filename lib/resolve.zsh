@@ -35,14 +35,33 @@ require_config() {
   for p in "${WT_PROJECTS[@]}"; do
     raw_root="${WT_PCFG[$p.repo_root]:-}"
     raw_wt="${WT_PCFG[$p.worktree_root]:-}"
-    [[ -n "$raw_root" ]] || { error "project '$p' is missing repo_root in $WT_CONFIG_FILE"; exit 3; }
-    [[ -n "$raw_wt"   ]] || { error "project '$p' is missing worktree_root in $WT_CONFIG_FILE"; exit 3; }
-    [[ -n "$(project_repo_root "$p")" ]] || {
-      error "project '$p' has an unusable repo_root (\"$raw_root\") in $WT_CONFIG_FILE"; exit 3; }
+
+    _wt_root_value_problem "$raw_root"
+    case "$REPLY_PROBLEM" in
+      empty)    error "project '$p' is missing repo_root in $WT_CONFIG_FILE"; exit 3 ;;
+      unset)    error "project '$p' has a repo_root that references an unset variable \$$REPLY_DETAIL (\"$raw_root\") in $WT_CONFIG_FILE"; exit 3 ;;
+      unusable) error "project '$p' has an unusable repo_root (\"$raw_root\") in $WT_CONFIG_FILE"; exit 3 ;;
+      # R32: relative repo_root/worktree_root values mean three different directories to
+      # three different downstream consumers of the SAME stored string --
+      # mkdir/git-worktree-add resolve it against whatever the invoking shell's cwd happens
+      # to be at the time, while require_config's own ":A" resolves it against WHATEVER cwd
+      # happened to be running when a workytree command reached this check. Reproduced:
+      # `workytree project add me src wts` (no leading "~"/"$VAR"/"/") was accepted, then
+      # silently meant three different directories to `mkdir -p`, `git worktree add`, and
+      # require_config, and the worktree landed NESTED INSIDE the repo itself. Refuse outright
+      # rather than pick one interpretation.
+      relative) error "project '$p' has a repo_root that is not an absolute path after expansion (\"$raw_root\" resolves to \"$REPLY_DETAIL\") in $WT_CONFIG_FILE"; exit 3 ;;
+    esac
+
+    _wt_root_value_problem "$raw_wt"
+    case "$REPLY_PROBLEM" in
+      empty)    error "project '$p' is missing worktree_root in $WT_CONFIG_FILE"; exit 3 ;;
+      unset)    error "project '$p' has a worktree_root that references an unset variable \$$REPLY_DETAIL (\"$raw_wt\") in $WT_CONFIG_FILE"; exit 3 ;;
+      unusable) error "project '$p' has an unusable worktree_root (\"$raw_wt\") in $WT_CONFIG_FILE"; exit 3 ;;
+      relative) error "project '$p' has a worktree_root that is not an absolute path after expansion (\"$raw_wt\" resolves to \"$REPLY_DETAIL\") in $WT_CONFIG_FILE"; exit 3 ;;
+    esac
+
     wt_root="$(project_worktree_root "$p")"
-    if [[ -z "$wt_root" ]]; then
-      error "project '$p' has an unusable worktree_root (\"$raw_wt\") in $WT_CONFIG_FILE"; exit 3
-    fi
     wt_canon="${wt_root:A}"
     if ! is_safe_worktree_root "$wt_canon" "$home_canon"; then
       error "project '$p' has an unsafe worktree_root (\"$wt_canon\"): refusing \"/\" or a strict ancestor of the home directory (\"$home_canon\")"
@@ -78,6 +97,37 @@ is_safe_repo_name() {
 is_safe_worktree_root() {
   local wt_canon="$1" home_canon="${2:-${HOME:A}}"
   [[ "$wt_canon" != "/" && "$home_canon" != "$wt_canon"/* ]]
+}
+
+# is_absolute_root_value <expanded-value>: true only if <expanded-value> (already run through
+# expand_path) starts with "/". R32.
+is_absolute_root_value() {
+  [[ "$1" == /* ]]
+}
+
+# _wt_root_value_problem <raw>: diagnoses a repo_root/worktree_root candidate as it appears in
+# config text (unexpanded). Sets REPLY_PROBLEM to one of "" (no problem), "empty", "unset",
+# "unusable", or "relative", and REPLY_DETAIL to supporting detail ("" for empty/unusable; the
+# unset variable's name for "unset"; the expanded value for "relative" and for "" itself).
+# Shared by require_config (an already-loaded config, R27/N-2/R32) and `workytree project
+# add`'s own up-front validation (R31: same substantive checks, different exit code) -- one
+# place that decides what counts as a usable root value, not two that could disagree.
+#
+# Order matters: an unset-variable reference is checked BEFORE testing the merely-expanded
+# result, because expand_path substitutes "" for an unset variable -- "$WORK/wts" with $WORK
+# unset expands to "/wts", which LOOKS like a perfectly fine absolute path. Reporting that as
+# "not absolute" (it IS absolute) or successfully accepting it (silently wrong location) would
+# both hide the actual mistake; naming the unset variable is the only diagnosis that's true.
+_wt_root_value_problem() {
+  local raw="$1" v unset_var
+  REPLY_PROBLEM="" REPLY_DETAIL=""
+  [[ -n "$raw" ]] || { REPLY_PROBLEM="empty"; return; }
+  unset_var="$(config_unset_var_refs "$raw" | head -1)"
+  if [[ -n "$unset_var" ]]; then REPLY_PROBLEM="unset"; REPLY_DETAIL="$unset_var"; return; fi
+  v="$(expand_path "$raw")"
+  if [[ -z "$v" ]]; then REPLY_PROBLEM="unusable"; return; fi
+  if ! is_absolute_root_value "$v"; then REPLY_PROBLEM="relative"; REPLY_DETAIL="$v"; return; fi
+  REPLY_DETAIL="$v"
 }
 
 project_exists()        { (( ${WT_PROJECTS[(Ie)$1]} )); }

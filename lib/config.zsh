@@ -31,6 +31,23 @@ expand_path() {
   print -r -- "${result%/}"
 }
 
+# config_unset_var_refs <raw>: prints, one per line, the name of every "$VAR"/"${VAR}"
+# reference in <raw> that currently names an UNSET shell variable. Mirrors expand_path's own
+# left-to-right, non-rescanning scan (same regex, same MBEGIN/MEND stepping) so "is this
+# reference unset" agrees exactly with what expand_path itself would silently substitute ""
+# for. R32: a repo_root/worktree_root like "$WORK/wts" with $WORK unset expands to "/wts" --
+# an accidentally ABSOLUTE-looking path that a plain "is it absolute" check would wave
+# through -- so callers validating a root value check this FIRST and report the unset
+# variable by name, rather than a confusing "not absolute" or "unusable" verdict about a
+# string the user never actually meant.
+config_unset_var_refs() {
+  local rest="$1"
+  while [[ "$rest" =~ '\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?' ]]; do
+    (( ${+parameters[$match[1]]} )) || print -r -- "$match[1]"
+    rest="${rest[MEND+1,-1]}"
+  done
+}
+
 _config_strip_comment() {
   setopt localoptions extendedglob
   local line="$1"
