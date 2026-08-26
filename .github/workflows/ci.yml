@@ -47,3 +47,28 @@ jobs:
             zsh -n "$f" || { echo "syntax error: $f"; rc=1; }
           done
           exit $rc
+
+  install-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install zsh
+        run: sudo apt-get update -q && sudo apt-get install -y -q zsh
+      - name: Install from checkout (FROM_CHECKOUT path), twice for idempotency
+        run: |
+          export HOME="$RUNNER_TEMP/home-checkout" ZDOTDIR="$RUNNER_TEMP/home-checkout"
+          mkdir -p "$HOME"
+          sh install.sh
+          "$HOME/.local/bin/workytree" --version | grep -q '^workytree '
+          test "$(grep -c 'shell/workytree\.zsh' "$HOME/.zshrc")" -eq 1
+          sh install.sh
+          test "$(grep -c 'shell/workytree\.zsh' "$HOME/.zshrc")" -eq 1
+      - name: Install via clone path (what curl | sh does)
+        run: |
+          export HOME="$RUNNER_TEMP/home-clone" ZDOTDIR="$RUNNER_TEMP/home-clone"
+          mkdir -p "$HOME"
+          cp install.sh "$HOME/install.sh"
+          WORKYTREE_REPO_URL="file://$GITHUB_WORKSPACE" sh "$HOME/install.sh"
+          test -x "$HOME/.local/share/workytree/bin/workytree"
+          "$HOME/.local/bin/workytree" --version | grep -q '^workytree '
