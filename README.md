@@ -78,6 +78,7 @@ whatever your deepest repo needs) or register the deep repo directly with `worky
     wt project add <name> <repo_root> <worktree_root>
     wt repo add <path> [--name n] [--project p]
     wt config get|set|edit|path
+    wt create --ai fix PROJ-1       # create, cd, then open an AI session there
 
 Repo names are resolved in order: registered `[repo]` alias → scan of every project's
 `repo_root` → current directory. Ambiguous names across projects need `--project <name>`; two
@@ -86,6 +87,53 @@ already in it) — register the one you want under a distinct alias with `workyt
 <path> --name <alias>` instead.
 `--project`, `--yes`/`-y`, and `--no-color` are global options and are accepted in any
 position on the command line.
+
+## AI sessions (opt-in)
+
+`create` can hand the new worktree straight to an AI coding agent. It is **off by
+default**; nothing about `wt create` changes until you turn it on.
+
+    wt create --ai fix PROJ-1        # this run only
+    wt config set ai_session always  # every run
+
+The agent runs in your current shell, in the new worktree, in the foreground — quit it
+and you are back in that worktree. This only works through the shell integration (`wt`,
+or `workytree` as the function this repo installs); calling `bin/workytree` directly
+prints a warning and still creates the worktree.
+
+| key | scope | meaning |
+| --- | --- | --- |
+| `ai_session` | global, `[project]` | `off` (default), `ask` (confirm first), `always` |
+| `ai_agent` | global, `[project]` | which agent to run; unset means auto-detect |
+
+Auto-detection takes the first of `claude`, `codex`, `gemini`, `cursor-agent`, `aider`
+found on your `PATH`. `--ai` overrides `ai_session` for one run and skips the `ask`
+confirmation.
+
+Before launching, workytree offers the agent's useful options as menus — the same
+suggestion-list-plus-free-text shape `kinds` already uses, so you can always type a value
+that isn't listed. What gets asked comes from an `[agent <name>]` section:
+
+    [agent claude]
+    command         = claude
+    ask             = permission_mode,model,teammate_mode
+    permission_mode = plan,acceptEdits,auto,bypassPermissions,dontAsk,manual
+    model           = opus,sonnet,fable
+    effort          = low,medium,high,xhigh,max
+    teammate_mode   = auto,tmux,iterm2,in-process
+
+`ask` chooses which options are asked about and in what order — `effort` above is defined
+but not asked until you add it to `ask`. A key's `_` becomes `-` and gains a `--` prefix,
+so `permission_mode` builds `--permission-mode <value>`. Choosing `(skip)` omits the flag.
+
+workytree ships exactly the block above as the built-in profile for `claude`. Writing your
+own `[agent claude]` section **replaces it wholesale** rather than merging, so you can
+shorten a list, not just extend it. An agent with no profile (`ai_agent = aider`) simply
+runs with no interview.
+
+`-y`/`--yes` skips the interview entirely and runs the bare `command`. Cancelling the
+interview (`q`) leaves the worktree in place and exits 0 — a session that did not open is
+never a failed `create`.
 
 ## Exit codes
 
@@ -144,6 +192,16 @@ before you hit a bug.
   at a `git worktree` directory registers that worktree itself under its own name. It also
   derives the registered name from a symlink's *resolved target*, not the symlink name you
   typed, when `--name` isn't given.
+- **`teammate_mode` rides an undocumented `claude` flag.** `--teammate-mode` does not
+  appear in `claude --help`; its allowed values (`auto`, `tmux`, `iterm2`, `in-process`)
+  were found by probing an invalid one. It can change or disappear in any `claude`
+  release, and when it does the assembled command fails at launch. That is survivable
+  precisely because the list lives in config: drop `teammate_mode` from `ask` in your own
+  `[agent claude]` section and you are unblocked without waiting for a workytree release.
+- **AI session arguments cannot be empty strings.** The command is handed to the shell
+  wrapper one argv element per line and read back with `${(f)}`, which is what lets
+  workytree avoid `eval` on a config-supplied string entirely. The cost is that
+  `--flag ""` cannot be expressed in an `[agent]` profile.
 
 ## Development
 
