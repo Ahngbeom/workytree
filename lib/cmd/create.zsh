@@ -98,9 +98,10 @@ cmd_create() {
   local -a pos
   local -i want_ai=0 saw_dashdash=0
   local arg
-  # `--ai`만 걸러내고 나머지 dash-prefixed 토큰은 지금까지처럼 positional로 남긴다.
-  # remove가 하듯 모든 `-*`를 usage error로 만들면 오늘 통과하던 입력이 깨진다 --
-  # 이 태스크의 범위가 아니다. `--`는 리터럴 `--ai`를 repo 이름으로 넘기는 탈출구다.
+  # Only `--ai` is filtered out; every other dash-prefixed token still stays positional, as
+  # it always has. Making every `-*` a usage error the way remove does would break input
+  # that passes today -- that's out of scope for this task. `--` is the escape hatch for
+  # passing a literal `--ai` as a repo name.
   for arg in "$@"; do
     if (( saw_dashdash )); then pos+=("$arg"); continue; fi
     case "$arg" in

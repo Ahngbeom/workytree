@@ -337,6 +337,20 @@ test_missing_runfile_warns_but_create_succeeds() {
   assert_dir "$HOME/wts/app/fix/PROJ-1"
 }
 
+test_unwritable_runfile_warns_but_create_succeeds() {
+  cli_fixture; fake_agent claude
+  # A runfile path under a nonexistent parent directory: ai_maybe_offer's write
+  # (`print -r -- "$out" > "$WORKYTREE_AI_RUNFILE"`, lib/agent.zsh) fails at the shell level
+  # rather than the runfile-unset gate, so this exercises the write-failure branch
+  # specifically, not the "no shell integration" one above.
+  local rf="$TMP_ROOT/no-such-dir/runfile"
+  local out rc
+  out="$(WORKYTREE_AI_RUNFILE="$rf" wt create app fix PROJ-1 main --ai -y 2>&1)"; rc=$?
+  assert_eq "$rc" 0 "an unwritable runfile must never fail create"
+  assert_contains "$out" "could not write"
+  assert_dir "$HOME/wts/app/fix/PROJ-1"
+}
+
 test_explicit_agent_missing_from_path_warns() {
   cli_fixture
   wt config set ai_agent nosuchagent >/dev/null
