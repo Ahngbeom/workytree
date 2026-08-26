@@ -14,6 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Verify tag matches WORKYTREE_VERSION
+        # No pipes in this step: the default shell is `bash -e {0}` (no pipefail), so a failing left-hand side of a pipeline would be masked and this gate would pass open.
         run: |
           tag="${GITHUB_REF_NAME#v}"
           ver="$(sed -n 's/^typeset -g WORKYTREE_VERSION="\([^"]*\)".*/\1/p' bin/workytree)"
