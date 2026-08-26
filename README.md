@@ -98,8 +98,10 @@ default**; nothing about `wt create` changes until you turn it on.
 
 The agent runs in your current shell, in the new worktree, in the foreground — quit it
 and you are back in that worktree. This only works through the shell integration (`wt`,
-or `workytree` as the function this repo installs); calling `bin/workytree` directly
-prints a warning and still creates the worktree.
+or `workytree` as the function this repo installs). Calling `bin/workytree` directly still
+creates the worktree either way, but never launches an agent: with AI sessions off (the
+default) that's silent, and with them turned on (`ai_session` other than `off`, or `--ai`)
+it instead prints a warning explaining why nothing launched.
 
 | key | scope | meaning |
 | --- | --- | --- |
@@ -128,8 +130,10 @@ so `permission_mode` builds `--permission-mode <value>`. Choosing `(skip)` omits
 
 workytree ships exactly the block above as the built-in profile for `claude`. Writing your
 own `[agent claude]` section **replaces it wholesale** rather than merging, so you can
-shorten a list, not just extend it. An agent with no profile (`ai_agent = aider`) simply
-runs with no interview.
+shorten a list, not just extend it. An agent with no profile (`ai_agent = aider`) has no
+options to build menus from, but that alone doesn't skip the interview: under
+`ai_session = ask` it still asks "open a $name session here?" before running, with just
+no per-option menus after it; only `ai_session = always` (or `--ai`) runs it straight away.
 
 `-y`/`--yes` skips the interview entirely and runs the bare `command`. Cancelling the
 interview (`q`) leaves the worktree in place and exits 0 — a session that did not open is
