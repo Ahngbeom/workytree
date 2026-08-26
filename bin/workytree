@@ -39,14 +39,14 @@ usage() {
   cat <<'EOF'
 Usage: workytree <command> [args] [--project <name>] [--yes|-y] [--no-color]
 
-  workytree init [name repo_root worktree_root]      interactive first-time setup
-  workytree create [repo] [kind] [ticket] [base] [--ai] create (or reuse) a worktree; asks for missing args
+  workytree init [name repo_root worktree_root]          interactive first-time setup
+  workytree create [--ai] [repo] [kind] [ticket] [base]  create (or reuse) a worktree; asks for missing args
   workytree remove <repo> <kind> <ticket> [--force] [-b|--branch] [-B|--branch-force]
-  workytree prune [repo]                             prune stale refs + orphan dirs
-  workytree list [repo]                              git worktree list per repo
-  workytree repos                                    repos across all projects
-  workytree path [repo [kind [ticket]]]              print a path (script-friendly)
-  workytree cd   [repo [kind [ticket]]]              cd (shell integration only)
+  workytree prune [repo]                                 prune stale refs + orphan dirs
+  workytree list [repo]                                  git worktree list per repo
+  workytree repos                                        repos across all projects
+  workytree path [repo [kind [ticket]]]                  print a path (script-friendly)
+  workytree cd   [repo [kind [ticket]]]                  cd (shell integration only)
   workytree project list|add <name> <repo_root> <worktree_root>|remove <name>|default <name>
   workytree repo    list|add <path> [--name n] [--project p]|remove <name>
   workytree config  path|get <key>|set <key> <value>|edit
