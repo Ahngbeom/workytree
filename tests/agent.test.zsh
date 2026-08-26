@@ -161,4 +161,92 @@ test_default_probe_order_matches_documented_list() {
   assert_eq "${(j:,:)WT_AI_PROBE_ORDER}" "claude,codex,gemini,cursor-agent,aider"
 }
 
+# answers <line...>: WORKYTREE_PROMPT_INPUT용 응답 파일을 만들고 경로를 REPLY_ANSWERS에 둔다.
+typeset -g REPLY_ANSWERS=""
+answers() { REPLY_ANSWERS="$TMP_ROOT/answers"; print -l -- "$@" > "$REPLY_ANSWERS"; }
+
+test_build_argv_maps_underscores_to_flags_and_omits_skips() {
+  write_config <<'EOF'
+[project w]
+repo_root = ~/a
+worktree_root = ~/b
+EOF
+  config_load
+  # ask = permission_mode,model,teammate_mode
+  #   permission_mode: 1=(skip) 2=plan 3=acceptEdits 4=auto 5=bypassPermissions 6=dontAsk 7=manual
+  #   model:           1=(skip) 2=opus 3=sonnet 4=fable
+  #   teammate_mode:   1=(skip) 2=auto 3=tmux 4=iterm2 5=in-process
+  answers 2 1 3
+  local out
+  out="$(WORKYTREE_PROMPT_INPUT="$REPLY_ANSWERS" ai_build_argv claude always 2>/dev/null)"
+  assert_eq "$out" $'claude\n--permission-mode\nplan\n--teammate-mode\ntmux'
+}
+
+test_build_argv_accepts_free_text_outside_the_list() {
+  write_config <<'EOF'
+[agent claude]
+ask = model
+model = opus,sonnet
+EOF
+  config_load
+  answers "claude-fable-5"
+  local out
+  out="$(WORKYTREE_PROMPT_INPUT="$REPLY_ANSWERS" ai_build_argv claude always 2>/dev/null)"
+  assert_eq "$out" $'claude\n--model\nclaude-fable-5'
+}
+
+test_build_argv_skips_ask_entries_with_no_value_list() {
+  write_config <<'EOF'
+[agent claude]
+ask = model,nonexistent_option
+model = opus
+EOF
+  config_load
+  answers 2
+  local out
+  out="$(WORKYTREE_PROMPT_INPUT="$REPLY_ANSWERS" ai_build_argv claude always 2>/dev/null)"
+  assert_eq "$out" $'claude\n--model\nopus' "an ask entry with no key is skipped, not an error"
+}
+
+test_build_argv_without_prompts_returns_bare_command() {
+  write_config <<'EOF'
+[agent claude]
+command = claude --bare
+ask = model
+model = opus
+EOF
+  config_load
+  local out
+  out="$(WT_YES=1 ai_build_argv claude always 2>/dev/null)"
+  assert_eq "$out" $'claude\n--bare' "-y skips the interview; command string is tokenized"
+}
+
+test_build_argv_ask_mode_declined_returns_nonzero() {
+  write_config <<'EOF'
+[agent claude]
+ask = model
+model = opus
+EOF
+  config_load
+  answers n
+  local out rc
+  out="$(WORKYTREE_PROMPT_INPUT="$REPLY_ANSWERS" ai_build_argv claude ask 2>/dev/null)"; rc=$?
+  assert_eq "$rc" 1 "declining the confirm is a refusal, not a crash"
+  assert_eq "$out" ""
+}
+
+test_build_argv_cancel_kills_only_the_subshell() {
+  write_config <<'EOF'
+[agent claude]
+ask = model
+model = opus
+EOF
+  config_load
+  answers q
+  local out rc
+  out="$(WORKYTREE_PROMPT_INPUT="$REPLY_ANSWERS" ai_build_argv claude always 2>/dev/null)"; rc=$?
+  assert_eq "$rc" 130 "q propagates prompt.zsh's exit 130 out of the substitution"
+  assert_eq "$out" "" "and the caller is still alive to see it"
+}
+
 run_tests

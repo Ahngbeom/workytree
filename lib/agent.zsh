@@ -84,3 +84,43 @@ ai_resolve_agent() {
   done
   return 1
 }
+
+# ai_build_argv <agent> <mode>: 실행할 argv를 한 줄에 하나씩 stdout으로 출력한다.
+# 사용자가 ask 모드에서 거절하면 rc 1.
+#
+# 호출자는 반드시 명령 치환으로 감싸야 한다: `out="$(ai_build_argv "$name" "$mode")"`.
+# lib/prompt.zsh의 취소 경로는 `exit 130`을 직접 호출하는데(:21, :22, :57), 이 인터뷰는
+# 워크트리가 이미 만들어진 *뒤에* 돌기 때문에 그 exit가 프로세스 전체에 닿으면 CLI가
+# 경로를 찍어놓고도 130으로 끝나고, 셸 래퍼는 `(( exit_code == 0 ))` 검사에서 걸려 cd를
+# 건너뛴다 -- 즉 워크트리는 생겼는데 사용자는 거기 못 가는 최악의 결과가 된다. 명령
+# 치환은 서브셸이므로 그 exit가 서브셸에서 멈추고 부모는 rc만 받는다(실측 확인). 이
+# 배치 하나로 prompt.zsh를 한 줄도 고치지 않고 spec §5.2("취소해도 워크트리는 남고
+# exit 0")를 만족한다.
+ai_build_argv() {
+  local name="$1" mode="$2" cmd ask values opt
+  local -a argv opts
+  cmd="$(ai_agent_command "$name")"
+  argv=( ${(z)cmd} )
+
+  if prompt_available; then
+    if [[ "$mode" == ask ]]; then
+      prompt_confirm "open a $name session here?" y || return 1
+    fi
+    if ask="$(ai_profile_get "$name" ask)" && [[ -n "$ask" ]]; then
+      opts=( ${(s:,:)ask} )
+      for opt in "${opts[@]}"; do
+        # spec §3.1: ask가 섹션에 없는 키를 가리키면 오류가 아니라 건너뛰기. 내장
+        # 프로필을 부분적으로 흉내 낸 설정이 config 전체를 못 쓰게 만드는 쪽이 나쁘다.
+        values="$(ai_profile_get "$name" "$opt")" || continue
+        [[ -n "$values" ]] || continue
+        # allow_free=1 -- 목록에 없는 값도 타이핑할 수 있다. 이것이 남의 CLI 플래그
+        # 목록이 낡았을 때를 조용한 실패가 아닌 가벼운 불편으로 낮추는 장치다.
+        prompt_choose "${opt//_/-}" 1 "(skip)" ${(s:,:)values}
+        [[ "$REPLY" == "(skip)" ]] && continue
+        argv+=( "--${opt//_/-}" "$REPLY" )
+      done
+    fi
+  fi
+
+  print -l -- "${argv[@]}"
+}
