@@ -17,8 +17,13 @@ typeset -g WORKYTREE_HOME="${0:A:h:h}"   # :A resolves the ~/.local/bin symlink
 # writing `/bin/echo SOMETHING` into $WORKYTREE_AI_RUNFILE got that command executed in the
 # calling shell after the cd -- on a plain `create` that never asked for an AI session.
 # Capture the value into our own name and remove the original from the environment before any
-# git invocation, so no descendant process ever sees the path.
-typeset -g WT_AI_RUNFILE="${WORKYTREE_AI_RUNFILE:-}"
+# git invocation, so no descendant process ever sees the path. `typeset -g` alone would leave
+# WT_AI_RUNFILE exported if a caller happened to already have that name exported (it preserves
+# an existing export attribute, not just the value) -- measured: a `post-checkout` hook on a
+# plain `wt create -y` then saw WORKYTREE_AI_RUNFILE=[] but WT_AI_RUNFILE=[...the path...],
+# reopening the exact leak this capture exists to close. `+x` on the same typeset clears the
+# export attribute unconditionally, regardless of what the caller's shell had set.
+typeset -g +x WT_AI_RUNFILE="${WORKYTREE_AI_RUNFILE:-}"
 unset WORKYTREE_AI_RUNFILE
 
 typeset -g  WT_PROJECT_OPT=""
