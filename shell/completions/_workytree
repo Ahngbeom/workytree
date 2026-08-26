@@ -1,0 +1,68 @@
+#compdef workytree wt
+#
+# All candidates come from `workytree __complete <what> [args]` (lib/cmd/complete.zsh) --
+# this file has NO knowledge of the config file format or the worktree directory layout.
+# That knowledge lives in exactly one place (lib/resolve.zsh, lib/config.zsh); this file
+# only renders whatever the CLI hands back.
+
+_workytree_src() { workytree __complete "$@" 2>/dev/null; }
+
+# _workytree_values <label> <__complete-args...>: R40 -- a brand-new user with nothing
+# registered yet (no repos, no projects, no kinds on disk) hits every dynamic completion
+# position with ZERO candidates. Calling `_values <label>` with no values after it is a
+# zsh completion-system usage error ("_values:compvalues:11: not enough arguments"), and
+# that message leaks straight into the terminal -- exactly the TAB-time noise this task
+# exists to prevent, and worse for the exact audience least equipped to make sense of it.
+# Compute the candidate array first and only call `_values` when it's non-empty; on empty,
+# do nothing -- a silent "nothing to offer" is the correct behavior a Tab press with no
+# candidates.
+_workytree_values() {
+  local label="$1"; shift
+  local -a cands; cands=( ${(f)"$(_workytree_src "$@")"} )
+  (( ${#cands} )) && _values "$label" "${cands[@]}"
+}
+
+_workytree() {
+  local -a cmds
+  cmds=( ${(f)"$(_workytree_src commands)"} )
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+  _arguments -C \
+    '--project[limit to a project]:project:->projects' \
+    '(-y --yes)'{-y,--yes}'[skip confirmations]' \
+    '--no-color[disable colors]' \
+    '1:command:->cmd' '*::arg:->args' && return
+  case "$state" in
+    projects) _workytree_values project projects; return ;;
+    cmd) _describe -t commands 'workytree command' cmds; return ;;
+  esac
+  # R7: with '1:command:->cmd' '*::arg:->args', _arguments -C rebases $words/$CURRENT for
+  # the ->args state to the SUBCOMMAND's own argument list: $words[1] is the subcommand
+  # itself (not "workytree"/"wt"), and CURRENT counts from there -- completing the first
+  # argument AFTER the subcommand means CURRENT==2. Verified empirically (a debug probe
+  # dropped into an analogous _arguments -C/->args function, driven by real Tab presses in
+  # an interactive zsh via `expect`, logged $words/$CURRENT for `dbg create x`): CURRENT
+  # was 2 with $words == (create x), not 1 with $line == (x) as an earlier draft of this
+  # file assumed. Using $(( CURRENT - 1 )) as the 1-based argument index, and indexing
+  # already-typed prior arguments out of $words (not $line, which numbering experiment
+  # showed tracks $words here, not a rest-only slice), is what that verification confirmed.
+  local sub="${words[1]}"
+  local -i idx=$(( CURRENT - 1 ))
+  case "$sub" in
+    create|remove|path|cd|list|prune)
+      case $idx in
+        1) _workytree_values repo repos ;;
+        2) [[ $sub == list || $sub == prune ]] || _workytree_values kind kinds "${words[2]}" ;;
+        3) [[ $sub == list || $sub == prune ]] || _workytree_values ticket tickets "${words[2]}" "${words[3]}" ;;
+        4) [[ $sub == create ]] && _workytree_values base branches "${words[2]}" ;;
+      esac
+      # remove's flags may appear anywhere among its positionals (lib/cmd/remove.zsh), so
+      # offer them at every position for `remove` rather than gating on $idx.
+      [[ $sub == remove ]] && _values -w flag --force --branch -b --branch-force -B
+      ;;
+    project) (( idx == 1 )) && _values sub list add remove default || _workytree_values project projects ;;
+    repo)    (( idx == 1 )) && _values sub list add remove || _files -/ ;;
+    config)  (( idx == 1 )) && _values sub path get set edit ;;
+  esac
+}
+_workytree "$@"
