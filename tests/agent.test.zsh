@@ -209,12 +209,18 @@ EOF
   assert_eq "$out" $'claude\n--model\nopus' "an ask entry with no key is skipped, not an error"
 }
 
-# NOTE: this only proves the no-tty branch of prompt_available (stdin isn't a tty under the
-# test runner, so prompt_available returns 1 regardless of WT_YES). It does NOT prove WT_YES
-# skips the interview: dropping `WT_YES=1` from the invocation below produces identical
-# output, because prompt_available's `[[ -t 0 ]]` check also returns 1 here on its own. No
-# test in this suite can discriminate the WT_YES gate specifically, since that requires a
-# real tty to reach the point where WT_YES vs. no-tty would differ.
+# This IS the test that discriminates the WT_YES gate, and `WT_YES=1` is load-bearing here --
+# not redundant with stdin. tests/run.zsh does not redirect stdin, so under a real terminal
+# stdin is a tty and prompt_available's `[[ -t 0 ]]` check alone would pass. Verified directly
+# under a real pty (Python's `pty.fork`, running lib/prompt.zsh's actual `prompt_available`):
+# with `WT_YES=0`, `prompt_available` returns 0 (the interview would run, and this test would
+# then block trying to read the menu answers from /dev/tty); with `WT_YES=1`, it returns 1 --
+# `prompt_available`'s `(( WT_YES )) && return 1` check runs BEFORE the `[[ -t 0 ]]` check, so
+# WT_YES short-circuits it regardless of whether stdin is a tty. Dropping `WT_YES=1` from the
+# invocation below does NOT produce identical output under a real terminal; it only looks that
+# way when this suite happens to run with stdin redirected away from a tty (CI, or a
+# non-interactive shell), which is a property of the runner, not of this test or of
+# prompt_available.
 test_build_argv_without_prompts_returns_bare_command() {
   write_config <<'EOF'
 [agent claude]
