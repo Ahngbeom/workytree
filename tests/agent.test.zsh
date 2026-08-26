@@ -443,7 +443,7 @@ test_backslash_n_in_interview_answer_is_not_interpreted_as_newline() {
 
 # Finding 6: docs/superpowers/specs/2026-08-26-auto-enter-ai-session-design.md used to claim
 # ${(z)} "handles quotes correctly". Verified directly it does not: `${(z)}` alone on
-# `claude --sys "be brief"` leaves the third word as the literal SEVEN characters
+# `claude --sys "be brief"` leaves the third word as the literal TEN characters
 # `"be brief"`, quote marks included. `${(Q)}`, applied after `${(z)}` in ai_build_argv, is
 # what strips them, so the documented way to write a multi-word `command` value (wrap it in
 # double quotes) delivers ONE argument with no quote characters in it.

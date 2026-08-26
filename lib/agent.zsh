@@ -114,7 +114,7 @@ ai_build_argv() {
   local -a out_argv opts
   cmd="$(ai_agent_command "$name")"
   # ${(z)} tokenizes but does NOT strip quote characters -- verified: cmd='claude --sys "be
-  # brief"' with only (z) applied leaves the argument as the four characters `"be brief"`,
+  # brief"' with only (z) applied leaves the argument as the ten characters `"be brief"`,
   # quotes and all. ${(Q)} is the pass that removes them, turning it into the two words the
   # user meant collapsed into one argument: `be brief`. Without it, a config author who
   # quotes a multi-word value (the only way `command` documents to express one) ships the

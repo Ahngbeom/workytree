@@ -283,7 +283,7 @@ EOF
 #
 # Fix round 2, Finding 2/6: this used to read `hello\ there` (backslash-escaped space), with a
 # comment here claiming `${(z)cmd}` was what turned the escaped space into one literal-space
-# word. Measured directly: `${(z)}` alone leaves that token as the literal SEVEN characters
+# word. Measured directly: `${(z)}` alone leaves that token as the literal TWELVE characters
 # `hello\ there`, backslash included -- it was the old, unqualified `print -l` at
 # serialization that silently ate the backslash as an "unrecognized" escape, giving the right
 # answer for the wrong reason, while a genuine escape like `\n` in the same position was
