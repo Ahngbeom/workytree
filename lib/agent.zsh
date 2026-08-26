@@ -113,7 +113,13 @@ ai_build_argv() {
   local name="$1" mode="$2" cmd ask values opt
   local -a out_argv opts
   cmd="$(ai_agent_command "$name")"
-  out_argv=( ${(z)cmd} )
+  # ${(z)} tokenizes but does NOT strip quote characters -- verified: cmd='claude --sys "be
+  # brief"' with only (z) applied leaves the argument as the four characters `"be brief"`,
+  # quotes and all. ${(Q)} is the pass that removes them, turning it into the two words the
+  # user meant collapsed into one argument: `be brief`. Without it, a config author who
+  # quotes a multi-word value (the only way `command` documents to express one) ships the
+  # quote characters straight to the agent.
+  out_argv=( ${(Q)${(z)cmd}} )
 
   if prompt_available; then
     if [[ "$mode" == ask ]]; then
@@ -137,11 +143,20 @@ ai_build_argv() {
     fi
   fi
 
-  print -l -- "${out_argv[@]}"
+  # -r, not just -l: plain `print -l` interprets backslash escapes in each element, and this
+  # is the one line that serializes argv into the runfile. Measured: `print -l -- "opus\n--x"`
+  # writes an actual newline where the two source characters `\n` were, so the wrapper's
+  # ${(f)} read-back on the other end sees it as TWO elements instead of one -- a `\n` typed
+  # into a config value or an interview answer injects an extra argument into the command
+  # about to run in the user's shell. `-r` disables that interpretation so each line holds
+  # exactly the bytes the element contains.
+  print -rl -- "${out_argv[@]}"
 }
 
 # ai_maybe_offer <project> <forced:0|1>: called after create has already succeeded. If
-# every gate passes, writes argv to $WORKYTREE_AI_RUNFILE.
+# every gate passes, writes argv to $WT_AI_RUNFILE (bin/workytree's own copy of the
+# $WORKYTREE_AI_RUNFILE the wrapper exported -- see bin/workytree's header for why the CLI
+# captures it into this name and unsets the original before touching git).
 #
 # This function is always rc 0. Failing to launch an AI session is not a failure of create --
 # the worktree was created, and that's this command's contract (spec §8). Every diagnostic
@@ -155,7 +170,7 @@ ai_maybe_offer() {
   if (( forced )); then mode=always; else mode="$(ai_session_mode "$project")"; fi
   [[ "$mode" == off ]] && return 0
 
-  if [[ -z "${WORKYTREE_AI_RUNFILE:-}" ]]; then
+  if [[ -z "${WT_AI_RUNFILE:-}" ]]; then
     warn "ai session skipped: shell integration required"
     warn "source shell/workytree.zsh from your shell config and use 'wt'/'workytree'"
     return 0
@@ -168,20 +183,31 @@ ai_maybe_offer() {
   # element (verified: cmd="nosuchagent" -> "n", not "nosuchagent"; cmd="claude --bare" ->
   # "claude" is fine because two words happen to dodge the collapse). Single-word commands are
   # the common case, so this would misdetect nearly every real agent. Building the array first
-  # and indexing that avoids the collapse entirely.
-  cmd_words=( ${(z)cmd} )
-  first="${cmd_words[1]}"
-  if ! ai_have_command "$first"; then
+  # and indexing that avoids the collapse entirely. ${(Q)} strips quote characters the same way
+  # ai_build_argv's tokenizing does (see its comment) -- otherwise a quoted first word would
+  # fail the PATH lookup below on the literal quote characters.
+  cmd_words=( ${(Q)${(z)cmd}} )
+  # `:-`, not a bare subscript: bin/workytree runs under `set -u`, and an `[agent x]` section
+  # with an empty or whitespace-only `command =` makes ${(z)cmd} split to ZERO words, so
+  # `${cmd_words[1]}` alone is a fatal "parameter not set" (verified: `local -a a=(); print
+  # "${a[1]}"` under `set -u` aborts the function with rc 1, printing nothing). That took down
+  # the whole CLI after the worktree path had already been printed -- the shell wrapper's `((
+  # exit_code == 0 ))` guard then skipped the cd, leaving the user outside a worktree that now
+  # exists. `:-` supplies "" instead of aborting, and an empty $first fails the PATH lookup
+  # below exactly like a nonexistent command name would, landing on the same warn-and-return-0
+  # path rather than a new one.
+  first="${cmd_words[1]:-}"
+  if [[ -z "$first" ]] || ! ai_have_command "$first"; then
     # Auto-detection only ever picks something already on PATH, so reaching here means the
-    # user named this agent explicitly. That the name they gave doesn't exist must not pass
-    # by silently.
+    # user named this agent explicitly, or gave an empty `command`. Either way it must not
+    # pass by silently.
     warn "ai session skipped: '$first' not found on PATH"
     return 0
   fi
 
   out="$(ai_build_argv "$name" "$mode")" || return 0
   [[ -n "$out" ]] || return 0
-  print -r -- "$out" > "$WORKYTREE_AI_RUNFILE" \
-    || warn "ai session skipped: could not write $WORKYTREE_AI_RUNFILE"
+  print -r -- "$out" > "$WT_AI_RUNFILE" \
+    || warn "ai session skipped: could not write $WT_AI_RUNFILE"
   return 0
 }

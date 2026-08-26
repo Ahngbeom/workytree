@@ -378,4 +378,108 @@ test_dashdash_lets_ai_be_a_literal_positional() {
   assert_contains "$out" "--ai"
 }
 
+# Finding 1: bin/workytree runs under `set -u`, and an `[agent x]` section with an empty (or
+# whitespace-only) `command =` makes ${(z)cmd} split to ZERO words -- `${cmd_words[1]}` alone
+# is then a fatal "parameter not set" that killed the whole process AFTER the worktree path
+# had already been printed. The shell wrapper's `(( exit_code == 0 ))` guard then skips the
+# cd, so the worktree exists but `create` reports failure and the user is left outside it.
+# Verified directly (independent of this test) that `set -u; local -a a=(); print "${a[1]}"`
+# aborts with rc 1 and no output, while `print "${a[1]:-}"` prints an empty string and
+# continues.
+test_empty_command_value_does_not_crash_create() {
+  cli_fixture
+  write_config <<'EOF'
+ai_agent = claude
+
+[project me]
+repo_root = ~/src
+worktree_root = ~/wts
+
+[agent claude]
+command =
+EOF
+  local rf="$TMP_ROOT/runfile"; : > "$rf"
+  local out rc
+  out="$(WORKYTREE_AI_RUNFILE="$rf" wt create app fix PROJ-1 main --ai -y 2>&1)"; rc=$?
+  assert_eq "$rc" 0 "an empty \`command =\` must not crash create under set -u"
+  assert_dir "$HOME/wts/app/fix/PROJ-1"
+  assert_eq "$(<"$rf")" "" "no runfile written when the resolved command is empty"
+}
+
+# Finding 2: `print -l` (no `-r`) interprets backslash escapes in the argv it serializes into
+# the runfile. A profile's free-typed option value (chosen at the interview, never passed
+# through ${(z)}) can contain a literal backslash-n -- `print -l` turns THAT `\n` into an
+# actual newline, and the wrapper's ${(f)} read-back on the other end then sees it as an EXTRA
+# argv element: a value typed at a prompt injects an argument into the command about to run in
+# the user's shell. This drives that through the interview path (not `command`, since (z)'s
+# own backslash handling is a separate matter -- see the quoting test below and finding 6) by
+# writing the WORKYTREE_PROMPT_INPUT file directly with printf (not the `answers` helper,
+# which itself uses an un-`-r` `print -l` and would collapse the literal backslash-n below
+# into a real newline before this test even reaches the code under test).
+test_backslash_n_in_interview_answer_is_not_interpreted_as_newline() {
+  cli_fixture; fake_agent claude
+  local rf="$TMP_ROOT/runfile"; : > "$rf"
+  local af="$TMP_ROOT/answers"
+  # Create? confirm -> permission-mode(1=skip) -> model(free text, literal backslash-n) ->
+  # teammate-mode(1=skip).
+  printf 'y\n1\nopus\\n--injected\n1\n' > "$af"
+  WORKYTREE_AI_RUNFILE="$rf" WORKYTREE_PROMPT_INPUT="$af" \
+    wt create app fix PROJ-1 main --ai >/dev/null 2>&1
+  local -a lines
+  lines=( "${(f)"$(<"$rf")"}" )
+  assert_eq "${#lines}" "3" "the backslash-n text must not become an extra argv element"
+  assert_eq "${lines[1]}" "claude"
+  assert_eq "${lines[2]}" "--model"
+  assert_eq "${lines[3]}" 'opus\n--injected' "literal backslash-n preserved, not split into a newline"
+}
+
+# Finding 6: docs/superpowers/specs/2026-08-26-auto-enter-ai-session-design.md used to claim
+# ${(z)} "handles quotes correctly". Verified directly it does not: `${(z)}` alone on
+# `claude --sys "be brief"` leaves the third word as the literal SEVEN characters
+# `"be brief"`, quote marks included. `${(Q)}`, applied after `${(z)}` in ai_build_argv, is
+# what strips them, so the documented way to write a multi-word `command` value (wrap it in
+# double quotes) delivers ONE argument with no quote characters in it.
+test_quoted_command_value_delivers_one_unquoted_argument() {
+  cli_fixture; fake_agent claude
+  write_config <<'EOF'
+[project me]
+repo_root = ~/src
+worktree_root = ~/wts
+
+[agent claude]
+command = claude --sys "be brief"
+EOF
+  local rf="$TMP_ROOT/runfile"; : > "$rf"
+  WORKYTREE_AI_RUNFILE="$rf" wt create app fix PROJ-1 main --ai -y >/dev/null 2>&1
+  local -a lines
+  lines=( "${(f)"$(<"$rf")"}" )
+  assert_eq "${#lines}" "3"
+  assert_eq "${lines[1]}" "claude"
+  assert_eq "${lines[2]}" "--sys"
+  assert_eq "${lines[3]}" "be brief" "quoted multi-word value arrives as ONE argument without quote characters"
+}
+
+# Finding 3: the shell wrapper mktemps a runfile and exports its path as WORKYTREE_AI_RUNFILE
+# into the CLI's environment on EVERY `create` -- it cannot know in advance whether the CLI
+# will use it. Left exported, every process the CLI spawns inherits it too, including `git
+# worktree add`'s post-checkout hook. Measured (independent of this test, with the pre-fix
+# CLI): a repo's post-checkout hook writing to that path got its own command executed in the
+# user's interactive shell after the cd, on a plain `create` that never even touched --ai. No
+# --ai here either -- this is deliberately the default-config, feature-untouched path,
+# matching README's claim that nothing about `wt create` changes until AI sessions are turned
+# on.
+test_ai_runfile_env_var_not_leaked_to_git_hooks() {
+  cli_fixture
+  local leak="$TMP_ROOT/leak-check"
+  mkdir -p "$HOME/src/app/.git/hooks"
+  cat > "$HOME/src/app/.git/hooks/post-checkout" <<HOOK
+#!/bin/sh
+printf 'value=[%s]\n' "\$WORKYTREE_AI_RUNFILE" > "$leak"
+HOOK
+  chmod +x "$HOME/src/app/.git/hooks/post-checkout"
+  local rf="$TMP_ROOT/runfile"; : > "$rf"
+  WORKYTREE_AI_RUNFILE="$rf" wt create app fix HOOKLEAK main -y >/dev/null 2>&1
+  assert_eq "$(<"$leak")" "value=[]" "the runfile path must not reach a git hook's environment"
+}
+
 run_tests

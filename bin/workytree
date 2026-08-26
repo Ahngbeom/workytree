@@ -7,6 +7,20 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:${PA
 typeset -g WORKYTREE_VERSION="0.1.0"
 typeset -g WORKYTREE_HOME="${0:A:h:h}"   # :A resolves the ~/.local/bin symlink
 
+# The shell wrapper (shell/workytree.zsh) mktemps a runfile and exports its path into our
+# environment as WORKYTREE_AI_RUNFILE on EVERY `create` -- it cannot know in advance whether
+# this run will actually use it (feature on or off, --ai or not). Left exported, every
+# process we spawn from here on would inherit it too, including `git worktree add`'s
+# post-checkout hook -- a hook that already runs as the user, but as an unattended, captured
+# subprocess, not as a command meant to run in the user's foreground interactive shell.
+# Measured: with the feature untouched (default config, no --ai), a repo's post-checkout hook
+# writing `/bin/echo SOMETHING` into $WORKYTREE_AI_RUNFILE got that command executed in the
+# calling shell after the cd -- on a plain `create` that never asked for an AI session.
+# Capture the value into our own name and remove the original from the environment before any
+# git invocation, so no descendant process ever sees the path.
+typeset -g WT_AI_RUNFILE="${WORKYTREE_AI_RUNFILE:-}"
+unset WORKYTREE_AI_RUNFILE
+
 typeset -g  WT_PROJECT_OPT=""
 typeset -gi WT_YES=0
 typeset -ga ARGS
@@ -21,7 +35,7 @@ usage() {
 Usage: workytree <command> [args] [--project <name>] [--yes|-y] [--no-color]
 
   workytree init [name repo_root worktree_root]      interactive first-time setup
-  workytree create [repo] [kind] [ticket] [base] [--ai]   create (or reuse) a worktree; asks for missing args
+  workytree create [repo] [kind] [ticket] [base] [--ai] create (or reuse) a worktree; asks for missing args
   workytree remove <repo> <kind> <ticket> [--force] [-b|--branch] [-B|--branch-force]
   workytree prune [repo]                             prune stale refs + orphan dirs
   workytree list [repo]                              git worktree list per repo

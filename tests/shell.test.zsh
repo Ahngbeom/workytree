@@ -279,10 +279,20 @@ EOF
 # test drives a real multi-element argv through config (an [agent claude] `command` override,
 # since the interview needs a real tty that the test runner doesn't have) -> ai_build_argv ->
 # the runfile -> the wrapper's ${(f)} split, and checks the fake agent received all of it
-# intact, in order, unsplit on internal whitespace. `hello\ there` (backslash-escaped space)
-# is what makes zsh's `${(z)cmd}` tokenize it as ONE word containing a literal space, rather
-# than splitting on that space or (as bare double quotes would, since `(z)` does not strip
-# quoting) leaving stray quote characters in the argument.
+# intact, in order, unsplit on internal whitespace.
+#
+# Fix round 2, Finding 2/6: this used to read `hello\ there` (backslash-escaped space), with a
+# comment here claiming `${(z)cmd}` was what turned the escaped space into one literal-space
+# word. Measured directly: `${(z)}` alone leaves that token as the literal SEVEN characters
+# `hello\ there`, backslash included -- it was the old, unqualified `print -l` at
+# serialization that silently ate the backslash as an "unrecognized" escape, giving the right
+# answer for the wrong reason, while a genuine escape like `\n` in the same position was
+# turned into a real newline and split into an extra argv element (see agent.zsh's argv test
+# for that fix, `print -rl`). A double-quoted value exercises the mechanism this test is
+# actually meant to cover: `${(z)}` alone leaves quote characters IN the word (verified:
+# `${(z)}` on `"hello there"` keeps the literal string `"hello there"`, quotes and all);
+# `${(Q)}`, applied after `${(z)}` in ai_build_argv, is what strips them and collapses it into
+# one clean argument.
 test_multi_element_argv_survives_the_round_trip() {
   make_repo "$HOME/src/app"
   write_config <<'EOF'
@@ -291,7 +301,7 @@ repo_root = ~/src
 worktree_root = ~/wts
 
 [agent claude]
-command = claude --bare hello\ there --flag
+command = claude --bare "hello there" --flag
 EOF
   fake_claude_argv
   local out
@@ -305,7 +315,7 @@ EOF
   done
   assert_eq "${#args}" "3" "all three non-executable argv elements arrived"
   assert_eq "${args[1]}" "--bare"
-  assert_eq "${args[2]}" "hello there" "the space-containing element arrived as ONE argument"
+  assert_eq "${args[2]}" "hello there" "the quoted, space-containing element arrived as ONE argument with no quote characters"
   assert_eq "${args[3]}" "--flag"
 }
 
