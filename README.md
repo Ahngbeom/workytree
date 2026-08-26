@@ -91,7 +91,10 @@ position on the command line.
 ## AI sessions (opt-in)
 
 `create` can hand the new worktree straight to an AI coding agent. It is **off by
-default**; nothing about `wt create` changes until you turn it on.
+default**: no agent is offered, prompted for, or launched until you turn it on. One thing
+is not gated by this: the shell wrapper always prepares the channel it would use to launch
+an agent, on every `create`, whether or not you ever turn the feature on — see "Known
+limitations" below.
 
     wt create --ai fix PROJ-1        # this run only
     wt config set ai_session always  # every run
@@ -208,11 +211,28 @@ before you hit a bug.
   but getting there means the value goes through `${(z)}`/`${(Q)}` first, with the usual
   shell-quoting rules: wrap a multi-word value in double quotes (`command = claude --sys "be
   brief"`) or escape a literal space with a backslash (`hello\ there`) to keep it as one
-  argument; either way the quotes/backslash are stripped before the agent sees it. A backslash
-  before anything else is still consumed by the tokenizer and does not survive into the
-  argument — there is no way to embed a literal backslash character, or a control character
-  like a newline, in a `command` value. And **arguments cannot be empty strings**: `--flag ""`
-  cannot be expressed in an `[agent]` profile.
+  argument; either way the quotes/backslash are stripped before the agent sees it. An
+  *unquoted* backslash is consumed by the tokenizer as an escape character (`command = claude
+  --bare C:\path` delivers `C:path`, backslash gone) — but a backslash inside single or double
+  quotes survives like any other character: both `command = claude --bare 'C:\path\to'` and
+  `command = claude --bare "C:\path\to"` deliver `C:\path\to` intact. A `$'...'`-quoted control
+  character is a sharper edge: `command = claude --bare $'a\nb' --after` turns `$'a\nb'` into a
+  real newline, and because the runfile format is one argv element per line, that newline reads
+  back as a second element — the agent receives four arguments (`--bare`, `a`, `b`, `--after`)
+  instead of the three the config author wrote. And **arguments cannot be empty strings**:
+  `--flag ""` cannot be expressed in an `[agent]` profile.
+- **The AI-session launch channel is armed on every `create`, even with the feature off.**
+  The shell wrapper creates a temp file under `$TMPDIR` named `workytree-ai.XXXXXX` on
+  *every* `wt create`, whether or not AI sessions are enabled — it cannot know in advance
+  whether the CLI will want it. After the `cd`, it executes whatever that file contains. The
+  CLI unsets `WORKYTREE_AI_RUNFILE` from the environment before running git, so a
+  `post-checkout` hook can no longer be handed the path directly — but a hook can still find
+  the file by globbing `"$TMPDIR"/workytree-ai.*` and get its command run in the user's
+  interactive shell, foreground and TTY-attached. Verified reproducible. This is not new code
+  execution — a `post-checkout` hook already runs arbitrary code as the user on every
+  `create`, with or without this feature — what changes is the context that code runs in:
+  instead of an unattended, captured subprocess, it lands in the same foreground shell the
+  user is about to type into, after the `cd`.
 
 ## Development
 
