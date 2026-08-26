@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install zsh (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q zsh
+      - name: Show tool versions
+        run: zsh --version && git --version
+      - name: Run tests
+        run: zsh tests/run.zsh
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install zsh and shellcheck
+        run: sudo apt-get update -q && sudo apt-get install -y -q zsh shellcheck
+      - name: shellcheck install.sh
+        run: shellcheck -s sh install.sh
+      - name: zsh syntax check
+        run: |
+          rc=0
+          for f in bin/workytree lib/*.zsh lib/cmd/*.zsh shell/workytree.zsh shell/completions/_workytree tests/*.zsh; do
+            zsh -n "$f" || { echo "syntax error: $f"; rc=1; }
+          done
+          exit $rc
+
+  install-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install zsh
+        run: sudo apt-get update -q && sudo apt-get install -y -q zsh
+      - name: Install from checkout (FROM_CHECKOUT path), twice for idempotency
+        run: |
+          export HOME="$RUNNER_TEMP/home-checkout" ZDOTDIR="$RUNNER_TEMP/home-checkout"
+          mkdir -p "$HOME"
+          sh install.sh
+          ver=$("$HOME/.local/bin/workytree" --version)
+          echo "$ver" | grep -q '^workytree '
+          test "$(grep -c 'shell/workytree\.zsh' "$HOME/.zshrc")" -eq 1
+          sh install.sh
+          test "$(grep -c 'shell/workytree\.zsh' "$HOME/.zshrc")" -eq 1
+      - name: Install via clone path (what curl | sh does)
+        run: |
+          export HOME="$RUNNER_TEMP/home-clone" ZDOTDIR="$RUNNER_TEMP/home-clone"
+          mkdir -p "$HOME"
+          cp install.sh "$HOME/install.sh"
+          WORKYTREE_REPO_URL="file://$GITHUB_WORKSPACE" sh "$HOME/install.sh"
+          test -x "$HOME/.local/share/workytree/bin/workytree"
+          ver=$("$HOME/.local/bin/workytree" --version)
+          echo "$ver" | grep -q '^workytree '

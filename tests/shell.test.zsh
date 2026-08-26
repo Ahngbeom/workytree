@@ -2,11 +2,17 @@
 source "${0:A:h}/helpers.zsh"
 SHELL_FILE="$WT_TEST_ROOT/shell/workytree.zsh"
 
-# zsh_i <code>: run in an interactive zsh with an isolated ZDOTDIR that sources the integration
+# zsh_i <code>: run in an interactive zsh with an isolated ZDOTDIR that sources the integration.
+# -d (NO_GLOBAL_RCS) skips /etc/zsh/zshrc -- Debian/Ubuntu's zsh package ships one that runs
+# `compinit` unconditionally for interactive shells, and on a runner with no controlling TTY
+# that aborts with "not interactive and can't open terminal" / "compinit: initialization
+# aborted" on both stdout+stderr (2>&1 below), polluting every captured assertion. $ZDOTDIR/.zshrc
+# (the only rc file this test suite relies on) still loads with -d -- only the SYSTEM-wide rc is
+# skipped.
 zsh_i() {
   export ZDOTDIR="$HOME"
   print -r -- "source '$SHELL_FILE'" > "$ZDOTDIR/.zshrc"
-  zsh -i -c "$1" 2>&1
+  zsh -d -i -c "$1" 2>&1
 }
 
 fixture() {
@@ -34,7 +40,7 @@ test_alias_off_by_config_or_env() {
 test_alias_skipped_when_wt_taken() {
   fixture
   print -r -- "wt() { echo mine; }; source '$SHELL_FILE'" > "$HOME/.zshrc"
-  local out; out="$(ZDOTDIR="$HOME" zsh -i -c 'wt' 2>&1)"
+  local out; out="$(ZDOTDIR="$HOME" zsh -d -i -c 'wt' 2>&1)"
   assert_contains "$out" "already defined"
   assert_contains "$out" "mine"
 }
@@ -47,7 +53,7 @@ test_alias_skipped_when_wt_taken() {
 test_alias_skipped_when_wt_is_alias() {
   fixture
   print -r -- "alias wt='echo mine-alias'; source '$SHELL_FILE'" > "$HOME/.zshrc"
-  local out; out="$(ZDOTDIR="$HOME" zsh -i -c 'wt' 2>&1)"
+  local out; out="$(ZDOTDIR="$HOME" zsh -d -i -c 'wt' 2>&1)"
   assert_contains "$out" "already defined"
   assert_contains "$out" "mine-alias"
   local -i has_parser_error=0
@@ -65,7 +71,7 @@ echo mine-command
 SCRIPT
   chmod +x "$HOME/bin/wt"
   print -r -- "export PATH=\"$HOME/bin:\$PATH\"; source '$SHELL_FILE'" > "$HOME/.zshrc"
-  local out; out="$(ZDOTDIR="$HOME" zsh -i -c 'wt' 2>&1)"
+  local out; out="$(ZDOTDIR="$HOME" zsh -d -i -c 'wt' 2>&1)"
   assert_contains "$out" "already defined"
   assert_contains "$out" "mine-command"
 }

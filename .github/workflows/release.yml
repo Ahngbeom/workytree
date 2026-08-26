@@ -1,0 +1,31 @@
+name: release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag matches WORKYTREE_VERSION
+        # No pipes in this step: the default shell is `bash -e {0}` (no pipefail), so a failing left-hand side of a pipeline would be masked and this gate would pass open.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(sed -n 's/^typeset -g WORKYTREE_VERSION="\([^"]*\)".*/\1/p' bin/workytree)"
+          echo "tag=$tag version=$ver"
+          if [ -z "$ver" ]; then echo "could not read WORKYTREE_VERSION from bin/workytree" >&2; exit 1; fi
+          if [ "$tag" != "$ver" ]; then echo "tag v$tag does not match WORKYTREE_VERSION=$ver" >&2; exit 1; fi
+      - name: Install zsh
+        run: sudo apt-get update -q && sudo apt-get install -y -q zsh
+      - name: Run tests
+        run: zsh tests/run.zsh
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes

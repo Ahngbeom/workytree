@@ -1,5 +1,8 @@
 # workytree
 
+[![ci](https://github.com/Ahngbeom/workytree/actions/workflows/ci.yml/badge.svg)](https://github.com/Ahngbeom/workytree/actions/workflows/ci.yml)
+(the badge renders as a broken image until this repository is public — GitHub does not serve it unauthenticated)
+
 Git worktree manager with project-scoped roots and an interactive `create`.
 `workytree` is the command; `wt` is installed as a short alias for interactive shell use
 (opt out with `alias_wt = false`, or `WORKYTREE_ALIAS=0` for the current shell).
@@ -21,9 +24,10 @@ it — no network access and no `WORKYTREE_INSTALL_DIR` needed. It symlinks
 the file up first (`.zshrc.bak-<timestamp>`) and never adding the line twice. It is safe to
 re-run.
 
-The one-liner below is the eventual intended install path once this repository is published
-somewhere `git clone`/`curl` can reach — **it does not work yet**, since nothing is published
-at that URL today:
+The one-liner below clones the repository and runs the installer directly — the same clone
+path this repository's `install-smoke` CI job exercises against every commit. It will work
+once this repository is public; **it does not work yet**, because the repository is private
+and an unauthenticated `curl` against it 404s today:
 
     curl -fsSL https://raw.githubusercontent.com/Ahngbeom/workytree/main/install.sh | sh
     exec zsh
