@@ -16,6 +16,7 @@ die() { echo "workytree: $*" >&2; exit 1; }
 # R50: resolve the directory this script itself lives in, so a `sh install.sh` run from
 # inside a workytree checkout can use THAT checkout as the install source instead of
 # cloning REPO_URL -- which, until the repository is published, cannot be cloned at all.
+# shellcheck disable=SC1007  # `CDPATH= cd` is the intended empty-assignment idiom, not a typo
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || die "could not resolve the directory containing this script"
 
 # FROM_CHECKOUT is true only when WORKYTREE_INSTALL_DIR was NOT given (an explicit override

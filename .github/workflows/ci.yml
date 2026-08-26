@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install zsh (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q zsh
+      - name: Show tool versions
+        run: zsh --version && git --version
+      - name: Run tests
+        run: zsh tests/run.zsh
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install zsh and shellcheck
+        run: sudo apt-get update -q && sudo apt-get install -y -q zsh shellcheck
+      - name: shellcheck install.sh
+        run: shellcheck -s sh install.sh
+      - name: zsh syntax check
+        run: |
+          rc=0
+          for f in bin/workytree lib/*.zsh lib/cmd/*.zsh shell/workytree.zsh tests/*.zsh; do
+            zsh -n "$f" || { echo "syntax error: $f"; rc=1; }
+          done
+          exit $rc
