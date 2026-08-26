@@ -1,5 +1,7 @@
 # workytree
 
+[![ci](https://github.com/Ahngbeom/workytree/actions/workflows/ci.yml/badge.svg)](https://github.com/Ahngbeom/workytree/actions/workflows/ci.yml)
+
 Git worktree manager with project-scoped roots and an interactive `create`.
 `workytree` is the command; `wt` is installed as a short alias for interactive shell use
 (opt out with `alias_wt = false`, or `WORKYTREE_ALIAS=0` for the current shell).
