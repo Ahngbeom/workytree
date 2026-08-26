@@ -202,10 +202,17 @@ before you hit a bug.
   release, and when it does the assembled command fails at launch. That is survivable
   precisely because the list lives in config: drop `teammate_mode` from `ask` in your own
   `[agent claude]` section and you are unblocked without waiting for a workytree release.
-- **AI session arguments cannot be empty strings.** The command is handed to the shell
-  wrapper one argv element per line and read back with `${(f)}`, which is what lets
-  workytree avoid `eval` on a config-supplied string entirely. The cost is that
-  `--flag ""` cannot be expressed in an `[agent]` profile.
+- **An `[agent]` profile's `command` is tokenized like a shell command line, not read as free
+  text.** It is handed to the shell wrapper one argv element per line and read back with
+  `${(f)}`, which is what lets workytree avoid `eval` on a config-supplied string entirely —
+  but getting there means the value goes through `${(z)}`/`${(Q)}` first, with the usual
+  shell-quoting rules: wrap a multi-word value in double quotes (`command = claude --sys "be
+  brief"`) or escape a literal space with a backslash (`hello\ there`) to keep it as one
+  argument; either way the quotes/backslash are stripped before the agent sees it. A backslash
+  before anything else is still consumed by the tokenizer and does not survive into the
+  argument — there is no way to embed a literal backslash character, or a control character
+  like a newline, in a `command` value. And **arguments cannot be empty strings**: `--flag ""`
+  cannot be expressed in an `[agent]` profile.
 
 ## Development
 
