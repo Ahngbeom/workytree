@@ -161,7 +161,8 @@ test_default_probe_order_matches_documented_list() {
   assert_eq "${(j:,:)WT_AI_PROBE_ORDER}" "claude,codex,gemini,cursor-agent,aider"
 }
 
-# answers <line...>: WORKYTREE_PROMPT_INPUT용 응답 파일을 만들고 경로를 REPLY_ANSWERS에 둔다.
+# answers <line...>: builds a WORKYTREE_PROMPT_INPUT answer file and puts its path in
+# REPLY_ANSWERS.
 typeset -g REPLY_ANSWERS=""
 answers() { REPLY_ANSWERS="$TMP_ROOT/answers"; print -l -- "$@" > "$REPLY_ANSWERS"; }
 
@@ -255,7 +256,8 @@ EOF
   assert_eq "$out" "" "and the caller is still alive to see it"
 }
 
-# 여기서부터는 CLI 왕복 테스트다. fixture는 tests/create.test.zsh와 같은 모양을 쓴다.
+# From here on, these are CLI round-trip tests. The fixture uses the same shape as
+# tests/create.test.zsh.
 cli_fixture() {
   make_repo "$HOME/src/app"
   write_config <<'EOF'
@@ -309,7 +311,7 @@ EOF
 test_interview_answers_reach_the_runfile() {
   cli_fixture; fake_agent claude
   local rf="$TMP_ROOT/runfile"; : > "$rf"
-  # Create? 확인 -> permission-mode(2=plan) -> model(1=skip) -> teammate-mode(3=tmux)
+  # Create? confirm -> permission-mode(2=plan) -> model(1=skip) -> teammate-mode(3=tmux)
   answers y 2 1 3
   WORKYTREE_AI_RUNFILE="$rf" WORKYTREE_PROMPT_INPUT="$REPLY_ANSWERS" \
     wt create app fix PROJ-1 main --ai >/dev/null 2>&1
