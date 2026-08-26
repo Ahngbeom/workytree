@@ -102,10 +102,13 @@ EOF
 # XDG_CONFIG_HOME but does not scrub PATH, and bin/workytree:5 force-prepends system
 # directories ahead of anything a test could put there anyway -- so a real `claude`/`codex`
 # on the developer's PATH would silently win detection and make these assertions
-# machine-dependent. WT_AI_PROBE_ORDER is a plain `typeset -ga` global, so overwriting it
-# in-process right before each detection assertion is enough to make the candidate list
-# (and therefore the outcome) depend only on what this file put on PATH via fake_agent,
-# never on ambient PATH state.
+# machine-dependent. Each test below shadows WT_AI_PROBE_ORDER with `local -a` rather than
+# assigning the plain `typeset -ga` global: zsh's dynamic scoping makes that local visible to
+# ai_resolve_agent for every call made from within the test function (including inside a
+# `$(...)` command substitution, which forks but inherits the local-variable stack), and it
+# pops back to the shipped default the moment the test function returns -- so an override in
+# one test can never leak into a later one, even though tests run in a fixed alphabetical
+# order against a PATH that also isn't reset between them (see fake_agent above).
 test_resolve_agent_prefers_explicit_then_probe_order() {
   write_config <<'EOF'
 [project w]
@@ -113,7 +116,7 @@ repo_root = ~/a
 worktree_root = ~/b
 EOF
   config_load
-  WT_AI_PROBE_ORDER=(wt-absent-a wt-absent-b)
+  local -a WT_AI_PROBE_ORDER=(wt-absent-a wt-absent-b)
   assert_exit 1 ai_resolve_agent w "nothing on PATH -> no agent"
 
   fake_agent codex aider
@@ -142,10 +145,20 @@ repo_root = ~/a
 worktree_root = ~/b
 EOF
   config_load
-  WT_AI_PROBE_ORDER=(wt-absent-a wt-absent-b)
+  local -a WT_AI_PROBE_ORDER=(wt-absent-a wt-absent-b)
   assert_eq "$(ai_resolve_agent w 2>/dev/null)" "" "no stdout when nothing found"
   assert_eq "$(ai_resolve_agent w 2>&1 >/dev/null)" "" "no stderr when nothing found"
   assert_exit 1 ai_resolve_agent w "rc 1 when nothing found"
+}
+
+# Every other test in this file overrides WT_AI_PROBE_ORDER (locally) so detection is
+# deterministic regardless of ambient PATH -- which means none of them would notice a
+# regression in the SHIPPED default order. This test intentionally does not touch
+# WT_AI_PROBE_ORDER, so it sees whatever lib/agent.zsh assigned at source time and pins it
+# against the order documented in lib/agent.zsh's own comment (claude first, then codex,
+# gemini, cursor-agent, aider).
+test_default_probe_order_matches_documented_list() {
+  assert_eq "${(j:,:)WT_AI_PROBE_ORDER}" "claude,codex,gemini,cursor-agent,aider"
 }
 
 run_tests

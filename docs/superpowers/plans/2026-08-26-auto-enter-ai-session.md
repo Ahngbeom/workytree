@@ -454,8 +454,11 @@ ai_profile_get() {
 ai_agent_command() { ai_profile_get "$1" command || print -r -- "$1"; }
 
 # ai_have_command <name>: PATH에 실행 가능한 파일이 있는가.
-# `whence -p`는 zsh의 명령 해시 테이블을 무시하고 PATH를 직접 훑는다 -- 테스트가 PATH
-# 앞에 가짜 디렉터리를 붙인 뒤 rehash 없이도 즉시 보이게 하려면 이쪽이어야 한다.
+# `whence -p`는 PATH를 직접 훑어 별칭/함수/빌트인을 건너뛰고 외부 명령만 찾는다. zsh의
+# `${+commands[$1]}` 조회도 실측 결과 동일하게 동작한다 -- PATH 앞에 디렉터리를 새로
+# 붙이면 rehash 없이도 즉시 반영된다(이 대목은 bash의 `hash -r` 요구와 다른 zsh 고유
+# 동작이며, 과거 이 주석은 반대로 적혀 있었다). 두 표현이 여기서는 동등하므로, "PATH에서
+# 이 이름을 찾는다"는 의도를 이름 그대로 드러내는 `whence -p`를 쓴다.
 ai_have_command() { whence -p -- "$1" >/dev/null 2>&1; }
 
 # ai_resolve_agent <project>: 쓸 에이전트 이름. 없으면 rc 1.
