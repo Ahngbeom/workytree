@@ -96,11 +96,16 @@ ai_resolve_agent() {
 # 치환은 서브셸이므로 그 exit가 서브셸에서 멈추고 부모는 rc만 받는다(실측 확인). 이
 # 배치 하나로 prompt.zsh를 한 줄도 고치지 않고 spec §5.2("취소해도 워크트리는 남고
 # exit 0")를 만족한다.
+#
+# R16: never name a local `argv` -- zsh binds `argv` to the function's own positional
+# parameters, so `argv=(...)` silently rebinds $1/$2/$@ for the rest of the call. Harmless
+# here only because name/mode are captured into scalars before the rebind and nothing after
+# reads a positional; renamed to out_argv so the next edit doesn't inherit the landmine.
 ai_build_argv() {
   local name="$1" mode="$2" cmd ask values opt
-  local -a argv opts
+  local -a out_argv opts
   cmd="$(ai_agent_command "$name")"
-  argv=( ${(z)cmd} )
+  out_argv=( ${(z)cmd} )
 
   if prompt_available; then
     if [[ "$mode" == ask ]]; then
@@ -117,10 +122,10 @@ ai_build_argv() {
         # 목록이 낡았을 때를 조용한 실패가 아닌 가벼운 불편으로 낮추는 장치다.
         prompt_choose "${opt//_/-}" 1 "(skip)" ${(s:,:)values}
         [[ "$REPLY" == "(skip)" ]] && continue
-        argv+=( "--${opt//_/-}" "$REPLY" )
+        out_argv+=( "--${opt//_/-}" "$REPLY" )
       done
     fi
   fi
 
-  print -l -- "${argv[@]}"
+  print -l -- "${out_argv[@]}"
 }

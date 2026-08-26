@@ -208,6 +208,12 @@ EOF
   assert_eq "$out" $'claude\n--model\nopus' "an ask entry with no key is skipped, not an error"
 }
 
+# NOTE: this only proves the no-tty branch of prompt_available (stdin isn't a tty under the
+# test runner, so prompt_available returns 1 regardless of WT_YES). It does NOT prove WT_YES
+# skips the interview: dropping `WT_YES=1` from the invocation below produces identical
+# output, because prompt_available's `[[ -t 0 ]]` check also returns 1 here on its own. No
+# test in this suite can discriminate the WT_YES gate specifically, since that requires a
+# real tty to reach the point where WT_YES vs. no-tty would differ.
 test_build_argv_without_prompts_returns_bare_command() {
   write_config <<'EOF'
 [agent claude]
@@ -218,7 +224,7 @@ EOF
   config_load
   local out
   out="$(WT_YES=1 ai_build_argv claude always 2>/dev/null)"
-  assert_eq "$out" $'claude\n--bare' "-y skips the interview; command string is tokenized"
+  assert_eq "$out" $'claude\n--bare' "prompts unavailable -> bare, tokenized command"
 }
 
 test_build_argv_ask_mode_declined_returns_nonzero() {
