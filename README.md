@@ -1,7 +1,6 @@
 # workytree
 
 [![ci](https://github.com/Ahngbeom/workytree/actions/workflows/ci.yml/badge.svg)](https://github.com/Ahngbeom/workytree/actions/workflows/ci.yml)
-(the badge renders as a broken image until this repository is public — GitHub does not serve it unauthenticated)
 
 Git worktree manager with project-scoped roots and an interactive `create`.
 `workytree` is the command; `wt` is installed as a short alias for interactive shell use
@@ -25,9 +24,7 @@ the file up first (`.zshrc.bak-<timestamp>`) and never adding the line twice. It
 re-run.
 
 The one-liner below clones the repository and runs the installer directly — the same clone
-path this repository's `install-smoke` CI job exercises against every commit. It will work
-once this repository is public; **it does not work yet**, because the repository is private
-and an unauthenticated `curl` against it 404s today:
+path this repository's `install-smoke` CI job exercises against every commit:
 
     curl -fsSL https://raw.githubusercontent.com/Ahngbeom/workytree/main/install.sh | sh
     exec zsh
