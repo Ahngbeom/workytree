@@ -654,4 +654,63 @@ test_uncreatable_config_directory_refuses() {
   chmod 755 "$HOME/locked"
 }
 
+test_agent_section_parses_and_get_works() {
+  write_config <<'EOF'
+[project fd]
+repo_root = ~/a
+worktree_root = ~/b
+
+[agent claude]
+command = claude
+ask = permission_mode,model
+model = opus,sonnet
+EOF
+  assert_eq "$(wt config get agent.claude.command)" "claude"
+  assert_eq "$(wt config get agent.claude.ask)" "permission_mode,model"
+  assert_eq "$(wt config get agent.claude.model)" "opus,sonnet"
+  assert_exit 1 wt config get agent.claude.nope
+}
+
+test_duplicate_agent_section_rejected() {
+  write_config <<'EOF'
+[agent claude]
+command = claude
+
+[agent claude]
+command = other
+EOF
+  local out rc
+  out="$(wt config get agent.claude.command 2>&1)"; rc=$?
+  assert_eq "$rc" 3 "duplicate [agent] is a config-state failure"
+  assert_contains "$out" "duplicate [agent claude]"
+}
+
+test_config_set_writes_agent_key_in_place() {
+  write_config <<'EOF'
+# keep me
+[agent claude]
+command = claude
+EOF
+  wt config set agent.claude.model opus >/dev/null
+  assert_eq "$(wt config get agent.claude.model)" "opus"
+  assert_eq "$(wt config get agent.claude.command)" "claude"
+  assert_contains "$(<"$XDG_CONFIG_HOME/workytree/config")" "# keep me"
+}
+
+test_agent_section_does_not_leak_into_projects_or_repos() {
+  write_config <<'EOF'
+[project fd]
+repo_root = ~/a
+worktree_root = ~/b
+
+[agent claude]
+command = claude
+EOF
+  config_load
+  assert_eq "${#WT_PROJECTS}" 1
+  assert_eq "${#WT_REPOS}" 0
+  assert_eq "${#WT_AGENTS}" 1
+  assert_eq "${WT_AGENTS[1]}" "claude"
+}
+
 run_tests
