@@ -52,8 +52,28 @@ workytree() {
   # stays the CLI's decision, not a side effect of which subcommand name the wrapper happened
   # to invoke.
   [[ "$sub" == cd ]] && call_args[$sub_idx]=path
+  # AI-session launch channel. bin/workytree never runs the agent itself -- it only writes
+  # "what to run" into this file. That keeps the CLI pure, while the TTY an interactive
+  # agent needs comes from here instead. The file is created by this function and removed
+  # by this function: if the CLI did its own mktemp, who removes it and when would become
+  # unclear, and the file would be left behind whenever the CLI process died.
+  #
+  # An EXIT trap set inside a zsh function is local to that function and fires when the
+  # function returns -- the agent runs inside this function, so the trap fires after it.
+  # rm -f is idempotent, so the explicit removal below and the trap firing again afterward
+  # (already gone) is harmless.
+  local runfile=""
+  if [[ "$sub" == create ]]; then
+    runfile="$(command mktemp "${TMPDIR:-/tmp}/workytree-ai.XXXXXX" 2>/dev/null)" || runfile=""
+    [[ -n "$runfile" ]] && trap 'command rm -f -- "$runfile"' EXIT
+  fi
+
   local output exit_code target head
-  output="$("$WORKYTREE_BIN" "${call_args[@]}")"
+  if [[ -n "$runfile" ]]; then
+    output="$(WORKYTREE_AI_RUNFILE="$runfile" "$WORKYTREE_BIN" "${call_args[@]}")"
+  else
+    output="$("$WORKYTREE_BIN" "${call_args[@]}")"
+  fi
   exit_code=$?
   # Split "everything except the last line" from "the last line" without a `path`/`fpath`
   # local (R16: `path` is tied to $PATH in zsh, even as a local). Works for empty output, a
@@ -67,9 +87,18 @@ workytree() {
   if [[ -o interactive && -n "$target" && -d "$target" ]]; then
     builtin cd -- "$target" || return 1
     print -P "%F{70}cd:%f $target"
+    # Run after the cd -- the agent must see the new worktree as its cwd. A plain call, not
+    # exec, so quitting the agent returns the user to a shell inside that worktree.
+    if [[ -n "$runfile" && -s "$runfile" ]]; then
+      local -a ai_cmd; ai_cmd=( ${(f)"$(<"$runfile")"} )
+      command rm -f -- "$runfile"
+      (( ${#ai_cmd} )) && "${ai_cmd[@]}"
+    fi
   elif [[ -n "$target" ]]; then
     print -r -- "$target"
   fi
+  # create still succeeds even if the agent exits nonzero -- the worktree was created, and
+  # that fact was already reported to the user.
   return 0
 }
 

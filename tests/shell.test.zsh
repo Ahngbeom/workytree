@@ -179,4 +179,62 @@ SCRIPT
   assert_eq "$(cat "$log")" "path"
 }
 
+# fake_claude: a fake agent placed on PATH. When run, it prints its own cwd and args -- this
+# is how we confirm the wrapper cd's *first* and only then runs it.
+fake_claude() {
+  mkdir -p "$HOME/fakebin"
+  cat > "$HOME/fakebin/claude" <<'EOF'
+#!/bin/sh
+echo "AGENT-RAN pwd=$PWD args=$*"
+EOF
+  chmod +x "$HOME/fakebin/claude"
+  export PATH="$HOME/fakebin:$PATH"
+}
+
+test_create_ai_runs_the_agent_inside_the_new_worktree() {
+  fixture; fake_claude
+  local out
+  out="$(zsh_i 'wt create app fix PROJ-1 main --ai -y')"
+  assert_contains "$out" "AGENT-RAN"
+  assert_contains "$out" "pwd=$HOME/wts/app/fix/PROJ-1"
+}
+
+test_create_without_ai_runs_nothing() {
+  fixture; fake_claude
+  local out
+  out="$(zsh_i 'wt create app fix PROJ-1 main -y')"
+  assert_eq "${out#*AGENT-RAN}" "$out" "no --ai, no agent"
+  # Two separate checks, not one "cd: $target" substring: `print -P "%F{70}cd:%f $target"`
+  # puts a color-reset escape between "cd:" and the space+path, so the literal adjacent
+  # string only appears when the terminal is reported as colorless. Checking "cd:" and the
+  # path independently verifies the ordinary auto-cd still ran without depending on that.
+  assert_contains "$out" "cd:"
+  assert_contains "$out" "$HOME/wts/app/fix/PROJ-1"
+}
+
+test_agent_exit_code_does_not_fail_create() {
+  fixture
+  mkdir -p "$HOME/fakebin"
+  print -r -- '#!/bin/sh' > "$HOME/fakebin/claude"
+  print -r -- 'exit 3'   >> "$HOME/fakebin/claude"
+  chmod +x "$HOME/fakebin/claude"
+  export PATH="$HOME/fakebin:$PATH"
+  local out
+  out="$(zsh_i 'wt create app fix PROJ-1 main --ai -y; echo "rc=$?"')"
+  assert_contains "$out" "rc=0" "the worktree was created; the agent's own exit is not create's"
+}
+
+# TMPDIR is exported to the test's own TMP_ROOT (not left as the shared ${TMPDIR:-/tmp})
+# so the wrapper's mktemp lands there too -- otherwise a concurrent test run's own
+# workytree-ai.* files in the shared system tmp dir could make this count nonzero for
+# reasons unrelated to this test.
+test_runfile_is_removed_after_the_run() {
+  fixture; fake_claude
+  export TMPDIR="$TMP_ROOT"
+  local out
+  out="$(zsh_i 'wt create app fix PROJ-1 main --ai -y; ls "${TMPDIR:-/tmp}" | grep -c "^workytree-ai\." || true')"
+  assert_contains "$out" "AGENT-RAN"
+  assert_eq "${out##*$'\n'}" "0" "no runfile left behind"
+}
+
 run_tests
