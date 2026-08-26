@@ -1,6 +1,7 @@
 # workytree
 
 [![ci](https://github.com/Ahngbeom/workytree/actions/workflows/ci.yml/badge.svg)](https://github.com/Ahngbeom/workytree/actions/workflows/ci.yml)
+(the badge renders as a broken image until this repository is public — GitHub does not serve it unauthenticated)
 
 Git worktree manager with project-scoped roots and an interactive `create`.
 `workytree` is the command; `wt` is installed as a short alias for interactive shell use
