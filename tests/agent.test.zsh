@@ -255,4 +255,113 @@ EOF
   assert_eq "$out" "" "and the caller is still alive to see it"
 }
 
+# 여기서부터는 CLI 왕복 테스트다. fixture는 tests/create.test.zsh와 같은 모양을 쓴다.
+cli_fixture() {
+  make_repo "$HOME/src/app"
+  write_config <<'EOF'
+[project me]
+repo_root = ~/src
+worktree_root = ~/wts
+EOF
+}
+
+test_default_off_writes_nothing_to_the_runfile() {
+  cli_fixture; fake_agent claude
+  local rf="$TMP_ROOT/runfile"; : > "$rf"
+  WORKYTREE_AI_RUNFILE="$rf" wt create app fix PROJ-1 main -y >/dev/null 2>&1
+  assert_dir "$HOME/wts/app/fix/PROJ-1"
+  assert_eq "$(<"$rf")" "" "ai_session defaults to off"
+}
+
+test_ai_flag_writes_runfile_and_create_still_prints_path_last() {
+  cli_fixture; fake_agent claude
+  local rf="$TMP_ROOT/runfile"; : > "$rf"
+  local out
+  out="$(WORKYTREE_AI_RUNFILE="$rf" wt create app fix PROJ-1 main --ai -y 2>/dev/null)"
+  assert_eq "${out##*$'\n'}" "$HOME/wts/app/fix/PROJ-1" "stdout contract is untouched"
+  assert_eq "$(<"$rf")" "claude"
+}
+
+test_ai_session_always_needs_no_flag() {
+  cli_fixture; fake_agent claude
+  wt config set ai_session always >/dev/null
+  local rf="$TMP_ROOT/runfile"; : > "$rf"
+  WORKYTREE_AI_RUNFILE="$rf" wt create app fix PROJ-1 main -y >/dev/null 2>&1
+  assert_eq "$(<"$rf")" "claude"
+}
+
+test_project_ai_session_overrides_global() {
+  cli_fixture
+  fake_agent claude
+  write_config <<'EOF'
+ai_session = always
+
+[project me]
+repo_root = ~/src
+worktree_root = ~/wts
+ai_session = off
+EOF
+  local rf="$TMP_ROOT/runfile"; : > "$rf"
+  WORKYTREE_AI_RUNFILE="$rf" wt create app fix PROJ-1 main -y >/dev/null 2>&1
+  assert_eq "$(<"$rf")" "" "project 'off' beats global 'always'"
+}
+
+test_interview_answers_reach_the_runfile() {
+  cli_fixture; fake_agent claude
+  local rf="$TMP_ROOT/runfile"; : > "$rf"
+  # Create? 확인 -> permission-mode(2=plan) -> model(1=skip) -> teammate-mode(3=tmux)
+  answers y 2 1 3
+  WORKYTREE_AI_RUNFILE="$rf" WORKYTREE_PROMPT_INPUT="$REPLY_ANSWERS" \
+    wt create app fix PROJ-1 main --ai >/dev/null 2>&1
+  assert_eq "$(<"$rf")" $'claude\n--permission-mode\nplan\n--teammate-mode\ntmux'
+}
+
+test_cancelled_interview_keeps_the_worktree_and_exits_zero() {
+  cli_fixture; fake_agent claude
+  local rf="$TMP_ROOT/runfile"; : > "$rf"
+  answers y q
+  local rc
+  WORKYTREE_AI_RUNFILE="$rf" WORKYTREE_PROMPT_INPUT="$REPLY_ANSWERS" \
+    wt create app fix PROJ-1 main --ai >/dev/null 2>&1; rc=$?
+  assert_eq "$rc" 0 "cancelling the interview never fails create"
+  assert_dir "$HOME/wts/app/fix/PROJ-1"
+  assert_eq "$(<"$rf")" ""
+}
+
+test_missing_runfile_warns_but_create_succeeds() {
+  cli_fixture; fake_agent claude
+  local out rc
+  out="$(wt create app fix PROJ-1 main --ai -y 2>&1)"; rc=$?
+  assert_eq "$rc" 0
+  assert_contains "$out" "shell integration"
+  assert_dir "$HOME/wts/app/fix/PROJ-1"
+}
+
+test_explicit_agent_missing_from_path_warns() {
+  cli_fixture
+  wt config set ai_agent nosuchagent >/dev/null
+  local rf="$TMP_ROOT/runfile"; : > "$rf"
+  local out rc
+  out="$(WORKYTREE_AI_RUNFILE="$rf" wt create app fix PROJ-1 main --ai -y 2>&1)"; rc=$?
+  assert_eq "$rc" 0
+  assert_contains "$out" "nosuchagent"
+  assert_eq "$(<"$rf")" ""
+}
+
+# test_no_agent_anywhere_is_silent (brief's Step 1) is intentionally omitted here: it wants a
+# PATH with zero installed agents, but setup_env never scrubs PATH and bin/workytree:5
+# force-prepends system directories ahead of anything a test could put there -- so on any
+# machine with a real `claude`/`codex`/etc. already installed, detection would find it and
+# the assertion would fail for a reason that has nothing to do with this code. The same
+# error-table row (nothing found -> silent, rc 1) is already covered at the unit level by
+# test_resolve_agent_silent_when_nothing_found above, which controls WT_AI_PROBE_ORDER
+# in-process -- the only level at which "nothing on PATH" is actually reproducible.
+test_dashdash_lets_ai_be_a_literal_positional() {
+  cli_fixture
+  local out rc
+  out="$(wt create -- --ai fix PROJ-1 main -y 2>&1)"; rc=$?
+  assert_eq "$rc" 1 "'--ai' after -- is a repo name, and there is no such repo"
+  assert_contains "$out" "--ai"
+}
+
 run_tests

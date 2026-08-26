@@ -129,3 +129,48 @@ ai_build_argv() {
 
   print -l -- "${out_argv[@]}"
 }
+
+# ai_maybe_offer <project> <forced:0|1>: create가 성공한 뒤 호출된다. 게이트를 모두
+# 통과하면 $WORKYTREE_AI_RUNFILE에 argv를 기록한다.
+#
+# 이 함수는 항상 rc 0이다. AI 세션을 못 띄운 것은 create의 실패가 아니다 -- 워크트리는
+# 만들어졌고, 그것이 이 명령의 계약이다(spec §8). 진단은 전부 warn(stderr)으로 나가므로
+# "stdout 마지막 줄 = 경로"도 그대로다.
+ai_maybe_offer() {
+  local project="$1"
+  local -i forced=$2
+  local mode name cmd first out
+  local -a cmd_words
+
+  if (( forced )); then mode=always; else mode="$(ai_session_mode "$project")"; fi
+  [[ "$mode" == off ]] && return 0
+
+  if [[ -z "${WORKYTREE_AI_RUNFILE:-}" ]]; then
+    warn "ai session skipped: shell integration required"
+    warn "source shell/workytree.zsh from your shell config and use 'wt'/'workytree'"
+    return 0
+  fi
+
+  name="$(ai_resolve_agent "$project")" || return 0
+  cmd="$(ai_agent_command "$name")"
+  # NOT `${${(z)cmd}[1]}`: when (z)-splitting yields exactly one word, that nested-subscript
+  # form silently indexes the ORIGINAL scalar by character instead of the split array by
+  # element (verified: cmd="nosuchagent" -> "n", not "nosuchagent"; cmd="claude --bare" ->
+  # "claude" is fine because two words happen to dodge the collapse). Single-word commands are
+  # the common case, so this would misdetect nearly every real agent. Building the array first
+  # and indexing that avoids the collapse entirely.
+  cmd_words=( ${(z)cmd} )
+  first="${cmd_words[1]}"
+  if ! ai_have_command "$first"; then
+    # 자동 탐색은 PATH에 있는 것만 고르므로 여기 오면 사용자가 직접 지정한 경우다.
+    # 지정한 이름이 없다는 사실은 조용히 넘기면 안 된다.
+    warn "ai session skipped: '$first' not found on PATH"
+    return 0
+  fi
+
+  out="$(ai_build_argv "$name" "$mode")" || return 0
+  [[ -n "$out" ]] || return 0
+  print -r -- "$out" > "$WORKYTREE_AI_RUNFILE" \
+    || warn "ai session skipped: could not write $WORKYTREE_AI_RUNFILE"
+  return 0
+}

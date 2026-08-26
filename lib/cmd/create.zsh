@@ -95,8 +95,21 @@ create_do() {
 
 cmd_create() {
   require_config
-  local -a pos; pos=("$@")
-  (( ${#pos} <= 4 )) || usage_error "usage: workytree create [repo] [kind] [ticket] [base]"
+  local -a pos
+  local -i want_ai=0 saw_dashdash=0
+  local arg
+  # `--ai`만 걸러내고 나머지 dash-prefixed 토큰은 지금까지처럼 positional로 남긴다.
+  # remove가 하듯 모든 `-*`를 usage error로 만들면 오늘 통과하던 입력이 깨진다 --
+  # 이 태스크의 범위가 아니다. `--`는 리터럴 `--ai`를 repo 이름으로 넘기는 탈출구다.
+  for arg in "$@"; do
+    if (( saw_dashdash )); then pos+=("$arg"); continue; fi
+    case "$arg" in
+      --)   saw_dashdash=1 ;;
+      --ai) want_ai=1 ;;
+      *)    pos+=("$arg") ;;
+    esac
+  done
+  (( ${#pos} <= 4 )) || usage_error "usage: workytree create [repo] [kind] [ticket] [base] [--ai]"
   local repo="" kind="" ticket="" base="" project="" repo_path="" r inferred=""
   inferred="$(infer_current_repo 2>/dev/null)" || inferred=""
 
@@ -147,4 +160,5 @@ cmd_create() {
     prompt_confirm "Create?" y || exit 130
   fi
   create_do "$project" "$repo" "$repo_path" "$kind" "$ticket" "$base_ref" "$base_label"
+  ai_maybe_offer "$project" "$want_ai"
 }
