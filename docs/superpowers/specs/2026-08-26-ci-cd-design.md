@@ -48,7 +48,7 @@
   - 타임아웃 10분.
 - **job `lint`** — `ubuntu-latest`
   - `shellcheck -s sh install.sh`. SC1007은 `install.sh` 19행에 `# shellcheck disable=SC1007` 인라인 주석으로 제외(관용구 오탐).
-  - `zsh -n` 문법 검사: `bin/workytree`, `lib/**/*.zsh`, `shell/workytree.zsh`, `tests/*.zsh`. shellcheck가 zsh를 지원하지 않으므로 최소한의 파싱 검증.
+  - `zsh -n` 문법 검사: `bin/workytree`, `lib/**/*.zsh`, `shell/workytree.zsh`, `shell/completions/_workytree`, `tests/*.zsh`. shellcheck가 zsh를 지원하지 않으므로 최소한의 파싱 검증.
 - **job `install-smoke`** — `ubuntu-latest`, 신규 테스트 파일 없이 워크플로 step만으로 구성
   - 임시 `HOME`에서 `sh install.sh` 실행 → `~/.local/bin/workytree --version` 출력 확인 → `.zshrc`에 source 줄 1회 추가 확인 → 재실행 시 멱등 확인.
   - `tests/install.test.zsh`가 이미 유사 검증을 하므로, 이 job은 **실제 기본 경로(`$HOME/.local/*`)에 대한 end-to-end 확인** 역할만 한다. 중복이 크면 제거 대상.

@@ -43,7 +43,7 @@ jobs:
       - name: zsh syntax check
         run: |
           rc=0
-          for f in bin/workytree lib/*.zsh lib/cmd/*.zsh shell/workytree.zsh tests/*.zsh; do
+          for f in bin/workytree lib/*.zsh lib/cmd/*.zsh shell/workytree.zsh shell/completions/_workytree tests/*.zsh; do
             zsh -n "$f" || { echo "syntax error: $f"; rc=1; }
           done
           exit $rc
