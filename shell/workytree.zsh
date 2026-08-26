@@ -62,10 +62,22 @@ workytree() {
   # function returns -- the agent runs inside this function, so the trap fires after it.
   # rm -f is idempotent, so the explicit removal below and the trap firing again afterward
   # (already gone) is harmless.
+  #
+  # The trap body must bind $runfile's VALUE now, not defer its expansion to when the trap
+  # fires: `trap 'cmd "$runfile"' EXIT` (single quotes) leaves the variable reference intact
+  # in the trap string, and zsh only expands it at fire time -- by then this function has
+  # already returned and its `local runfile` has gone out of scope, so the trap runs with an
+  # EMPTY value and deletes nothing. `${(q)runfile}` interpolates the value immediately, into
+  # a shell-quoted literal safe to re-parse later, so the trap still targets the right path
+  # even after `runfile` no longer exists. Plain double quotes (`trap "cmd $runfile" EXIT`)
+  # would expand at the right time but NOT re-quote -- `$TMPDIR` is user-controlled (mktemp
+  # is rooted at it), so a space or quote character in that path would either split into
+  # extra words or break the trap string outright; `${(q)}` is what makes the substitution
+  # safe against that.
   local runfile=""
   if [[ "$sub" == create ]]; then
     runfile="$(command mktemp "${TMPDIR:-/tmp}/workytree-ai.XXXXXX" 2>/dev/null)" || runfile=""
-    [[ -n "$runfile" ]] && trap 'command rm -f -- "$runfile"' EXIT
+    [[ -n "$runfile" ]] && trap "command rm -f -- ${(q)runfile}" EXIT
   fi
 
   local output exit_code target head

@@ -237,4 +237,76 @@ test_runfile_is_removed_after_the_run() {
   assert_eq "${out##*$'\n'}" "0" "no runfile left behind"
 }
 
+# Fix round 1, Finding 1: the pre-fix trap was `trap 'command rm -f -- "$runfile"' EXIT`
+# (single quotes) -- $runfile is expanded only when the trap FIRES, which is after this
+# function has already returned and its `local runfile` has gone out of scope. So the trap
+# ran `rm -f --` with an empty argument and deleted nothing. The only thing that ever
+# actually cleaned up was the explicit `rm -f` right before the agent runs, which is only
+# reached when --ai fires interactively -- test_runfile_is_removed_after_the_run above
+# exercises exactly that path, so it never caught this. An ordinary `create` with no `--ai`
+# still mktemps a runfile (the wrapper can't know in advance whether the CLI will use it)
+# but never writes or removes it via that explicit rm, so cleanup depends entirely on the
+# trap. Same TMPDIR isolation as the test above, for the same reason.
+test_runfile_is_removed_without_ai() {
+  fixture
+  export TMPDIR="$TMP_ROOT"
+  local out
+  out="$(zsh_i 'wt create app fix PROJ-1 main -y; ls "${TMPDIR:-/tmp}" | grep -c "^workytree-ai\." || true')"
+  assert_eq "${out##*$'\n'}" "0" "no runfile left behind on a plain create without --ai"
+}
+
+# fake_claude_argv: like fake_claude, but echoes each argv element it received on its own
+# line, prefixed so the assertions below can pick just those lines out of the rest of the
+# session's output. Needed to check argv elements individually (order, and whether an
+# embedded space survived as ONE element) -- fake_claude's single `args=$*` line collapses
+# that distinction.
+fake_claude_argv() {
+  mkdir -p "$HOME/fakebin"
+  cat > "$HOME/fakebin/claude" <<'EOF'
+#!/bin/sh
+echo "AGENT-RAN"
+for a in "$@"; do
+  printf 'ARG:%s\n' "$a"
+done
+EOF
+  chmod +x "$HOME/fakebin/claude"
+  export PATH="$HOME/fakebin:$PATH"
+}
+
+# Fix round 1, Finding 2: every other test in this file produces a single-word runfile
+# ("claude"), so the ${(f)}-into-array reconstruction in shell/workytree.zsh -- the entire
+# basis for the "no eval" safety claim -- is never actually exercised past one element. This
+# test drives a real multi-element argv through config (an [agent claude] `command` override,
+# since the interview needs a real tty that the test runner doesn't have) -> ai_build_argv ->
+# the runfile -> the wrapper's ${(f)} split, and checks the fake agent received all of it
+# intact, in order, unsplit on internal whitespace. `hello\ there` (backslash-escaped space)
+# is what makes zsh's `${(z)cmd}` tokenize it as ONE word containing a literal space, rather
+# than splitting on that space or (as bare double quotes would, since `(z)` does not strip
+# quoting) leaving stray quote characters in the argument.
+test_multi_element_argv_survives_the_round_trip() {
+  make_repo "$HOME/src/app"
+  write_config <<'EOF'
+[project me]
+repo_root = ~/src
+worktree_root = ~/wts
+
+[agent claude]
+command = claude --bare hello\ there --flag
+EOF
+  fake_claude_argv
+  local out
+  out="$(zsh_i 'wt create app fix PROJ-1 main --ai -y')"
+  assert_contains "$out" "AGENT-RAN"
+  local -a lines args
+  lines=( "${(f)out}" )
+  local l
+  for l in "${lines[@]}"; do
+    [[ "$l" == ARG:* ]] && args+=( "${l#ARG:}" )
+  done
+  assert_eq "${#args}" "3" "all three non-executable argv elements arrived"
+  assert_eq "${args[1]}" "--bare"
+  assert_eq "${args[2]}" "hello there" "the space-containing element arrived as ONE argument"
+  assert_eq "${args[3]}" "--flag"
+}
+
 run_tests

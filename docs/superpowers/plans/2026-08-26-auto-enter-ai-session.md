@@ -1035,18 +1035,32 @@ Expected: FAIL — `AGENT-RAN`이 출력에 없음 (래퍼가 runfile을 만들�
 `shell/workytree.zsh:55-73`(`local output exit_code target head`부터 `return 0`까지)을 교체:
 
 ```zsh
-  # AI 세션 실행 채널. bin/workytree는 실행하지 않고 "무엇을 실행할지"만 이 파일에
-  # 적는다 -- CLI가 순수하게 남는 대신, 대화형 에이전트에 필요한 TTY는 여기서 온다.
-  # 파일은 이 함수가 만들고 이 함수가 지운다: CLI가 직접 mktemp하면 누가 언제 지우는지가
-  # 불분명해지고, CLI가 죽었을 때 파일이 남는다.
+  # AI-session launch channel. bin/workytree never runs the agent itself -- it only writes
+  # "what to run" into this file. That keeps the CLI pure, while the TTY an interactive
+  # agent needs comes from here instead. The file is created by this function and removed
+  # by this function: if the CLI did its own mktemp, who removes it and when would become
+  # unclear, and the file would be left behind whenever the CLI process died.
   #
-  # zsh에서 함수 안에 건 EXIT 트랩은 그 함수에 국소적이며 함수가 반환할 때 실행된다 --
-  # 에이전트는 함수 안에서 돌므로 트랩은 그 뒤에 터진다. rm -f는 멱등하므로 아래에서
-  # 이미 지운 뒤 한 번 더 불려도 무해하다.
+  # An EXIT trap set inside a zsh function is local to that function and fires when the
+  # function returns -- the agent runs inside this function, so the trap fires after it.
+  # rm -f is idempotent, so the explicit removal below and the trap firing again afterward
+  # (already gone) is harmless.
+  #
+  # The trap body must bind $runfile's VALUE now, not defer its expansion to when the trap
+  # fires: `trap 'cmd "$runfile"' EXIT` (single quotes) leaves the variable reference intact
+  # in the trap string, and zsh only expands it at fire time -- by then this function has
+  # already returned and its `local runfile` has gone out of scope, so the trap runs with an
+  # EMPTY value and deletes nothing. `${(q)runfile}` interpolates the value immediately, into
+  # a shell-quoted literal safe to re-parse later, so the trap still targets the right path
+  # even after `runfile` no longer exists. Plain double quotes (`trap "cmd $runfile" EXIT`)
+  # would expand at the right time but NOT re-quote -- `$TMPDIR` is user-controlled (mktemp
+  # is rooted at it), so a space or quote character in that path would either split into
+  # extra words or break the trap string outright; `${(q)}` is what makes the substitution
+  # safe against that.
   local runfile=""
   if [[ "$sub" == create ]]; then
     runfile="$(command mktemp "${TMPDIR:-/tmp}/workytree-ai.XXXXXX" 2>/dev/null)" || runfile=""
-    [[ -n "$runfile" ]] && trap 'command rm -f -- "$runfile"' EXIT
+    [[ -n "$runfile" ]] && trap "command rm -f -- ${(q)runfile}" EXIT
   fi
 
   local output exit_code target head
@@ -1068,8 +1082,8 @@ Expected: FAIL — `AGENT-RAN`이 출력에 없음 (래퍼가 runfile을 만들�
   if [[ -o interactive && -n "$target" && -d "$target" ]]; then
     builtin cd -- "$target" || return 1
     print -P "%F{70}cd:%f $target"
-    # 실행은 cd 뒤다 -- 에이전트는 새 워크트리를 cwd로 봐야 한다. exec가 아니라 일반
-    # 호출이므로 에이전트를 끝내면 사용자는 그 워크트리 안의 셸로 돌아온다.
+    # Run after the cd -- the agent must see the new worktree as its cwd. A plain call, not
+    # exec, so quitting the agent returns the user to a shell inside that worktree.
     if [[ -n "$runfile" && -s "$runfile" ]]; then
       local -a ai_cmd; ai_cmd=( ${(f)"$(<"$runfile")"} )
       command rm -f -- "$runfile"
@@ -1078,8 +1092,8 @@ Expected: FAIL — `AGENT-RAN`이 출력에 없음 (래퍼가 runfile을 만들�
   elif [[ -n "$target" ]]; then
     print -r -- "$target"
   fi
-  # 에이전트가 0이 아닌 코드로 끝나도 create는 성공이다 -- 워크트리는 만들어졌고
-  # 그 사실은 이미 사용자에게 보고됐다.
+  # create still succeeds even if the agent exits nonzero -- the worktree was created, and
+  # that fact was already reported to the user.
   return 0
 }
 ```
