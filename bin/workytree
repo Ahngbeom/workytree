@@ -7,6 +7,25 @@ export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:${PA
 typeset -g WORKYTREE_VERSION="0.1.0"
 typeset -g WORKYTREE_HOME="${0:A:h:h}"   # :A resolves the ~/.local/bin symlink
 
+# The shell wrapper (shell/workytree.zsh) mktemps a runfile and exports its path into our
+# environment as WORKYTREE_AI_RUNFILE on EVERY `create` -- it cannot know in advance whether
+# this run will actually use it (feature on or off, --ai or not). Left exported, every
+# process we spawn from here on would inherit it too, including `git worktree add`'s
+# post-checkout hook -- a hook that already runs as the user, but as an unattended, captured
+# subprocess, not as a command meant to run in the user's foreground interactive shell.
+# Measured: with the feature untouched (default config, no --ai), a repo's post-checkout hook
+# writing `/bin/echo SOMETHING` into $WORKYTREE_AI_RUNFILE got that command executed in the
+# calling shell after the cd -- on a plain `create` that never asked for an AI session.
+# Capture the value into our own name and remove the original from the environment before any
+# git invocation, so no descendant process ever sees the path. `typeset -g` alone would leave
+# WT_AI_RUNFILE exported if a caller happened to already have that name exported (it preserves
+# an existing export attribute, not just the value) -- measured: a `post-checkout` hook on a
+# plain `wt create -y` then saw WORKYTREE_AI_RUNFILE=[] but WT_AI_RUNFILE=[...the path...],
+# reopening the exact leak this capture exists to close. `+x` on the same typeset clears the
+# export attribute unconditionally, regardless of what the caller's shell had set.
+typeset -g +x WT_AI_RUNFILE="${WORKYTREE_AI_RUNFILE:-}"
+unset WORKYTREE_AI_RUNFILE
+
 typeset -g  WT_PROJECT_OPT=""
 typeset -gi WT_YES=0
 typeset -ga ARGS
@@ -20,14 +39,14 @@ usage() {
   cat <<'EOF'
 Usage: workytree <command> [args] [--project <name>] [--yes|-y] [--no-color]
 
-  workytree init [name repo_root worktree_root]      interactive first-time setup
-  workytree create [repo] [kind] [ticket] [base]     create (or reuse) a worktree; asks for missing args
+  workytree init [name repo_root worktree_root]          interactive first-time setup
+  workytree create [--ai] [repo] [kind] [ticket] [base]  create (or reuse) a worktree; asks for missing args
   workytree remove <repo> <kind> <ticket> [--force] [-b|--branch] [-B|--branch-force]
-  workytree prune [repo]                             prune stale refs + orphan dirs
-  workytree list [repo]                              git worktree list per repo
-  workytree repos                                    repos across all projects
-  workytree path [repo [kind [ticket]]]              print a path (script-friendly)
-  workytree cd   [repo [kind [ticket]]]              cd (shell integration only)
+  workytree prune [repo]                                 prune stale refs + orphan dirs
+  workytree list [repo]                                  git worktree list per repo
+  workytree repos                                        repos across all projects
+  workytree path [repo [kind [ticket]]]                  print a path (script-friendly)
+  workytree cd   [repo [kind [ticket]]]                  cd (shell integration only)
   workytree project list|add <name> <repo_root> <worktree_root>|remove <name>|default <name>
   workytree repo    list|add <path> [--name n] [--project p]|remove <name>
   workytree config  path|get <key>|set <key> <value>|edit
@@ -59,7 +78,7 @@ main() {
   case "$command" in
     help|-h|--help) usage ;;
     --version|version) print -r -- "workytree $WORKYTREE_VERSION" ;;
-    init|create|remove|prune|list|repos|path|cd|project|repo|config|__complete)
+    init|create|remove|prune|list|repos|path|cd|project|repo|config|__complete|__ai-configured)
       (( $+functions[cmd_$command] )) || die "command not implemented yet: $command"
       "cmd_$command" "$@" ;;
     *) usage >&2; usage_error "unknown command: $command" ;;

@@ -35,6 +35,22 @@ _workytree_locate_subcommand() {
   print -r -- 0
 }
 
+# _workytree_has_ai_flag <args...>: true if this command line opts into an AI session via
+# --ai. Mirrors cmd_create's own filtering (lib/cmd/create.zsh) token for token: only `--ai`
+# counts, and a `--` ends option parsing so a later `--ai` is a positional, not the flag. If
+# this scan and the CLI's ever disagreed, the wrapper would arm the execution channel for a
+# run the CLI treats as opted out, or leave it unarmed for one the CLI expects to use.
+_workytree_has_ai_flag() {
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --)   return 1 ;;
+      --ai) return 0 ;;
+    esac
+  done
+  return 1
+}
+
 workytree() {
   local -i sub_idx
   sub_idx="$(_workytree_locate_subcommand "$@")"
@@ -52,8 +68,57 @@ workytree() {
   # stays the CLI's decision, not a side effect of which subcommand name the wrapper happened
   # to invoke.
   [[ "$sub" == cd ]] && call_args[$sub_idx]=path
+  # AI-session launch channel. bin/workytree never runs the agent itself -- it only writes
+  # "what to run" into this file. That keeps the CLI pure, while the TTY an interactive
+  # agent needs comes from here instead. The file is created by this function and removed
+  # by this function: if the CLI did its own mktemp, who removes it and when would become
+  # unclear, and the file would be left behind whenever the CLI process died.
+  #
+  # An EXIT trap set inside a zsh function is local to that function and fires when the
+  # function returns -- the agent runs inside this function, so the trap fires after it.
+  # rm -f is idempotent, so the explicit removal below and the trap firing again afterward
+  # (already gone) is harmless.
+  #
+  # The trap body must bind $runfile's VALUE now, not defer its expansion to when the trap
+  # fires: `trap 'cmd "$runfile"' EXIT` (single quotes) leaves the variable reference intact
+  # in the trap string, and zsh only expands it at fire time -- by then this function has
+  # already returned and its `local runfile` has gone out of scope, so the trap runs with an
+  # EMPTY value and deletes nothing. `${(q)runfile}` interpolates the value immediately, into
+  # a shell-quoted literal safe to re-parse later, so the trap still targets the right path
+  # even after `runfile` no longer exists. Plain double quotes (`trap "cmd $runfile" EXIT`)
+  # would expand at the right time but NOT re-quote -- `$TMPDIR` is user-controlled (mktemp
+  # is rooted at it), so a space or quote character in that path would either split into
+  # extra words or break the trap string outright; `${(q)}` is what makes the substitution
+  # safe against that.
+  # Arm the channel only when this user has actually opted in. The file the wrapper creates
+  # here is an execution channel -- whatever ends up in it runs in the interactive shell after
+  # the cd -- so creating one on every `create` handed a channel to people who never enabled
+  # the feature: a repo's post-checkout hook, which runs inside `git worktree add`, could find
+  # it by globbing $TMPDIR and get a command run there.
+  #
+  # Unsetting WORKYTREE_AI_RUNFILE from the CLI's environment (bin/workytree) hides the path,
+  # but hiding it is not the same as closing the channel: on Linux a same-user hook can read
+  # the CLI's exec-time environment through /proc/<pid>/environ, and reach an open descriptor
+  # through /proc/<pid>/fd. So no in-process channel can be made unforgeable against a hook
+  # that already runs as the user -- the achievable property is that the channel does not
+  # exist at all unless the feature is in use, which is what this gate provides.
+  #
+  # _WORKYTREE_AI_CONFIGURED is resolved once when this file is sourced, the same shape
+  # _workytree_alias_enabled uses and with the same consequence: changing `ai_session` takes
+  # effect in the next shell. Per-command freshness would mean spawning the CLI an extra time
+  # on every `create`.
+  local runfile=""
+  if [[ "$sub" == create ]] && { (( _WORKYTREE_AI_CONFIGURED )) || _workytree_has_ai_flag "$@" }; then
+    runfile="$(command mktemp "${TMPDIR:-/tmp}/workytree-ai.XXXXXX" 2>/dev/null)" || runfile=""
+    [[ -n "$runfile" ]] && trap "command rm -f -- ${(q)runfile}" EXIT
+  fi
+
   local output exit_code target head
-  output="$("$WORKYTREE_BIN" "${call_args[@]}")"
+  if [[ -n "$runfile" ]]; then
+    output="$(WORKYTREE_AI_RUNFILE="$runfile" "$WORKYTREE_BIN" "${call_args[@]}")"
+  else
+    output="$("$WORKYTREE_BIN" "${call_args[@]}")"
+  fi
   exit_code=$?
   # Split "everything except the last line" from "the last line" without a `path`/`fpath`
   # local (R16: `path` is tied to $PATH in zsh, even as a local). Works for empty output, a
@@ -67,9 +132,18 @@ workytree() {
   if [[ -o interactive && -n "$target" && -d "$target" ]]; then
     builtin cd -- "$target" || return 1
     print -P "%F{70}cd:%f $target"
+    # Run after the cd -- the agent must see the new worktree as its cwd. A plain call, not
+    # exec, so quitting the agent returns the user to a shell inside that worktree.
+    if [[ -n "$runfile" && -s "$runfile" ]]; then
+      local -a ai_cmd; ai_cmd=( ${(f)"$(<"$runfile")"} )
+      command rm -f -- "$runfile"
+      (( ${#ai_cmd} )) && "${ai_cmd[@]}"
+    fi
   elif [[ -n "$target" ]]; then
     print -r -- "$target"
   fi
+  # create still succeeds even if the agent exits nonzero -- the worktree was created, and
+  # that fact was already reported to the user.
   return 0
 }
 
@@ -121,6 +195,13 @@ _workytree_wt_is_ours() {
   unfunction _workytree_wt_probe
   return $(( ! is_ours ))
 }
+
+# Resolved once, here, rather than on every `create`: answering it costs a CLI invocation
+# (it has to read the config, including every [project]'s own ai_session), and the wrapper
+# needs the answer before it decides whether to create the runfile. Fails closed -- a
+# non-zero exit, including a config that will not parse, leaves the channel unarmed.
+typeset -gi _WORKYTREE_AI_CONFIGURED=0
+"$WORKYTREE_BIN" __ai-configured 2>/dev/null && _WORKYTREE_AI_CONFIGURED=1
 
 if _workytree_alias_enabled; then
   if (( $+functions[wt] )); then

@@ -654,4 +654,121 @@ test_uncreatable_config_directory_refuses() {
   chmod 755 "$HOME/locked"
 }
 
+test_agent_section_parses_and_get_works() {
+  write_config <<'EOF'
+[project fd]
+repo_root = ~/a
+worktree_root = ~/b
+
+[agent claude]
+command = claude
+ask = permission_mode,model
+model = opus,sonnet
+EOF
+  assert_eq "$(wt config get agent.claude.command)" "claude"
+  assert_eq "$(wt config get agent.claude.ask)" "permission_mode,model"
+  assert_eq "$(wt config get agent.claude.model)" "opus,sonnet"
+  assert_exit 1 wt config get agent.claude.nope
+}
+
+test_duplicate_agent_section_rejected() {
+  write_config <<'EOF'
+[agent claude]
+command = claude
+
+[agent claude]
+command = other
+EOF
+  local out rc
+  out="$(wt config get agent.claude.command 2>&1)"; rc=$?
+  assert_eq "$rc" 3 "duplicate [agent] is a config-state failure"
+  assert_contains "$out" "duplicate [agent claude]"
+}
+
+test_config_set_writes_agent_key_in_place() {
+  write_config <<'EOF'
+# keep me
+[agent claude]
+command = claude
+EOF
+  wt config set agent.claude.model opus >/dev/null
+  assert_eq "$(wt config get agent.claude.model)" "opus"
+  assert_eq "$(wt config get agent.claude.command)" "claude"
+  assert_contains "$(<"$XDG_CONFIG_HOME/workytree/config")" "# keep me"
+}
+
+test_agent_section_does_not_leak_into_projects_or_repos() {
+  write_config <<'EOF'
+[project fd]
+repo_root = ~/a
+worktree_root = ~/b
+
+[agent claude]
+command = claude
+EOF
+  config_load
+  assert_eq "${#WT_PROJECTS}" 1
+  assert_eq "${#WT_REPOS}" 0
+  assert_eq "${#WT_AGENTS}" 1
+  assert_eq "${WT_AGENTS[1]}" "claude"
+}
+
+
+# The shell wrapper resolves "are AI sessions on?" once when it is sourced, so turning them on
+# does not take effect in shells that are already running. That is the same trade-off alias_wt
+# makes, but alias_wt is set once at install time while ai_session is something a user changes
+# mid-session -- and the failure it produces is silent: `wt create` simply does not open a
+# session, with nothing to indicate why. The hint is the only thing standing between that and
+# a confusing bug report.
+test_setting_ai_session_hints_that_a_new_shell_is_needed() {
+  write_config <<'EOF'
+[project fd]
+repo_root = ~/a
+worktree_root = ~/b
+EOF
+  local out
+  out="$(wt config set ai_session always 2>&1)"
+  assert_contains "$out" "set ai_session = always"
+  assert_contains "$out" "new shell" "turning sessions on must say the running shell will not see it"
+}
+
+test_setting_ai_session_per_project_hints_too() {
+  write_config <<'EOF'
+[project fd]
+repo_root = ~/a
+worktree_root = ~/b
+EOF
+  local out
+  out="$(wt config set project.fd.ai_session ask 2>&1)"
+  assert_contains "$out" "new shell"
+}
+
+# The hint is about arming the channel. Turning sessions OFF needs no new shell to be safe --
+# the CLI re-reads ai_session on every run, so `off` takes effect immediately even though the
+# wrapper still creates a runfile until the shell is replaced.
+test_setting_ai_session_off_does_not_hint() {
+  write_config <<'EOF'
+ai_session = always
+
+[project fd]
+repo_root = ~/a
+worktree_root = ~/b
+EOF
+  local out
+  out="$(wt config set ai_session off 2>&1)"
+  assert_contains "$out" "set ai_session = off"
+  assert_eq "${out#*new shell}" "$out" "turning it off needs no new shell"
+}
+
+test_unrelated_keys_do_not_hint() {
+  write_config <<'EOF'
+[project fd]
+repo_root = ~/a
+worktree_root = ~/b
+EOF
+  local out
+  out="$(wt config set default_project fd 2>&1)"
+  assert_eq "${out#*new shell}" "$out"
+}
+
 run_tests

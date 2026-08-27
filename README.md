@@ -78,6 +78,7 @@ whatever your deepest repo needs) or register the deep repo directly with `worky
     wt project add <name> <repo_root> <worktree_root>
     wt repo add <path> [--name n] [--project p]
     wt config get|set|edit|path
+    wt create --ai fix PROJ-1       # create, cd, then open an AI session there
 
 Repo names are resolved in order: registered `[repo]` alias → scan of every project's
 `repo_root` → current directory. Ambiguous names across projects need `--project <name>`; two
@@ -86,6 +87,59 @@ already in it) — register the one you want under a distinct alias with `workyt
 <path> --name <alias>` instead.
 `--project`, `--yes`/`-y`, and `--no-color` are global options and are accepted in any
 position on the command line.
+
+## AI sessions (opt-in)
+
+`create` can hand the new worktree straight to an AI coding agent. It is **off by
+default**: no agent is offered, prompted for, or launched until you turn it on, and the
+temp file the wrapper would launch it through is not created either. See "Known
+limitations" below.
+
+    wt create --ai fix PROJ-1        # this run only
+    wt config set ai_session always  # every run
+
+The agent runs in your current shell, in the new worktree, in the foreground — quit it
+and you are back in that worktree. This only works through the shell integration (`wt`,
+or `workytree` as the function this repo installs). Calling `bin/workytree` directly still
+creates the worktree either way, but never launches an agent: with AI sessions off (the
+default) that's silent, and with them turned on (`ai_session` other than `off`, or `--ai`)
+it instead prints a warning explaining why nothing launched.
+
+| key | scope | meaning |
+| --- | --- | --- |
+| `ai_session` | global, `[project]` | `off` (default), `ask` (confirm first), `always` |
+| `ai_agent` | global, `[project]` | which agent to run; unset means auto-detect |
+
+Auto-detection takes the first of `claude`, `codex`, `gemini`, `cursor-agent`, `aider`
+found on your `PATH`. `--ai` overrides `ai_session` for one run and skips the `ask`
+confirmation.
+
+Before launching, workytree offers the agent's useful options as menus — the same
+suggestion-list-plus-free-text shape `kinds` already uses, so you can always type a value
+that isn't listed. What gets asked comes from an `[agent <name>]` section:
+
+    [agent claude]
+    command         = claude
+    ask             = permission_mode,model,teammate_mode
+    permission_mode = plan,acceptEdits,auto,bypassPermissions,dontAsk,manual
+    model           = opus,sonnet,fable
+    effort          = low,medium,high,xhigh,max
+    teammate_mode   = auto,tmux,iterm2,in-process
+
+`ask` chooses which options are asked about and in what order — `effort` above is defined
+but not asked until you add it to `ask`. A key's `_` becomes `-` and gains a `--` prefix,
+so `permission_mode` builds `--permission-mode <value>`. Choosing `(skip)` omits the flag.
+
+workytree ships exactly the block above as the built-in profile for `claude`. Writing your
+own `[agent claude]` section **replaces it wholesale** rather than merging, so you can
+shorten a list, not just extend it. An agent with no profile (`ai_agent = aider`) has no
+options to build menus from, but that alone doesn't skip the interview: under
+`ai_session = ask` it still asks "open a $name session here?" before running, with just
+no per-option menus after it; only `ai_session = always` (or `--ai`) runs it straight away.
+
+`-y`/`--yes` skips the interview entirely and runs the bare `command`. Cancelling the
+interview (`q`) leaves the worktree in place and exits 0 — a session that did not open is
+never a failed `create`.
 
 ## Exit codes
 
@@ -144,6 +198,52 @@ before you hit a bug.
   at a `git worktree` directory registers that worktree itself under its own name. It also
   derives the registered name from a symlink's *resolved target*, not the symlink name you
   typed, when `--name` isn't given.
+- **`teammate_mode` rides an undocumented `claude` flag.** `--teammate-mode` does not
+  appear in `claude --help`; its allowed values (`auto`, `tmux`, `iterm2`, `in-process`)
+  were found by probing an invalid one. It can change or disappear in any `claude`
+  release, and when it does the assembled command fails at launch. That is survivable
+  precisely because the list lives in config: drop `teammate_mode` from `ask` in your own
+  `[agent claude]` section and you are unblocked without waiting for a workytree release.
+- **An `[agent]` profile's `command` is tokenized like a shell command line, not read as free
+  text.** It is handed to the shell wrapper one argv element per line and read back with
+  `${(f)}`, which is what lets workytree avoid `eval` on a config-supplied string entirely —
+  but getting there means the value goes through `${(z)}`/`${(Q)}` first, with the usual
+  shell-quoting rules: wrap a multi-word value in double quotes (`command = claude --sys "be
+  brief"`) or escape a literal space with a backslash (`hello\ there`) to keep it as one
+  argument; either way the quotes/backslash are stripped before the agent sees it. An
+  *unquoted* backslash is consumed by the tokenizer as an escape character (`command = claude
+  --bare C:\path` delivers `C:path`, backslash gone) — but a backslash inside single or double
+  quotes survives like any other character: both `command = claude --bare 'C:\path\to'` and
+  `command = claude --bare "C:\path\to"` deliver `C:\path\to` intact. A `$'...'`-quoted control
+  character is a sharper edge: `command = claude --bare $'a\nb' --after` turns `$'a\nb'` into a
+  real newline, and because the runfile format is one argv element per line, that newline reads
+  back as a second element — the agent receives four arguments (`--bare`, `a`, `b`, `--after`)
+  instead of the three the config author wrote. And **arguments cannot be empty strings**:
+  `--flag ""` cannot be expressed in an `[agent]` profile.
+- **The AI-session launch channel is armed on every `create`, even with the feature off.**
+  **Turning AI sessions on takes effect in the next shell.** The wrapper works out whether
+  you have enabled them once, when your shell config sources it — answering that question
+  costs a CLI call, and it needs the answer before every `create` — so a shell that was
+  already running keeps the answer it started with. `workytree config set ai_session
+  ask|always` says so when you run it; `--ai` works immediately in any shell, and turning
+  sessions back **off** is honored immediately too, because the CLI re-reads `ai_session` on
+  every run. This is the same trade-off `alias_wt` makes.
+
+- **While AI sessions are on, a repository's `post-checkout` hook can interfere with the
+  launch.** The wrapper creates a temp file under `$TMPDIR` named `workytree-ai.XXXXXX`,
+  and after the `cd` it runs whatever that file contains. Only opted-in runs create one
+  (`--ai`, or `ai_session` set to `ask`/`always` somewhere in your config), so a user who
+  never enables the feature has no such file for anything to find. When you have enabled
+  it, a hook — which runs inside `git worktree add`, before the launch — can locate the
+  file by globbing and put its own command there.
+
+  This is not new code execution: a `post-checkout` hook already runs arbitrary code as you
+  on every `create`, feature or no feature. What changes is the context, from an unattended
+  captured subprocess to the foreground shell you are about to type into. It also cannot be
+  closed by hiding the path or the descriptor — on Linux a same-user process can read
+  another's exec-time environment through `/proc/<pid>/environ` and reach its open files
+  through `/proc/<pid>/fd` — so the channel existing only for opted-in runs is the property
+  workytree can actually offer, not a step toward a stronger one.
 
 ## Development
 

@@ -59,6 +59,9 @@ _workytree() {
       # remove's flags may appear anywhere among its positionals (lib/cmd/remove.zsh), so
       # offer them at every position for `remove` rather than gating on $idx.
       [[ $sub == remove ]] && _values -w flag --force --branch -b --branch-force -B
+      # create's only flag; like remove's, it may appear anywhere among the positionals
+      # (lib/cmd/create.zsh), so offer it at every position rather than gating on $idx.
+      [[ $sub == create ]] && _values -w flag --ai
       ;;
     project) (( idx == 1 )) && _values sub list add remove default || _workytree_values project projects ;;
     repo)    (( idx == 1 )) && _values sub list add remove || _files -/ ;;

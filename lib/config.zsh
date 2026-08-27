@@ -1,7 +1,8 @@
-# Single point of config-file I/O. Format: INI-like; "[project <name>]" / "[repo <name>]" sections,
-# "key = value" lines, "#" comments (whole line, or after whitespace — a "#" glued to a non-space
-# character is not treated as a comment start). No repeated keys: a key reused within the same
-# section (or twice at global scope) is a hard error naming file:lineno, same as a duplicate
+# Single point of config-file I/O. Format: INI-like; "[project <name>]" / "[repo <name>]" /
+# "[agent <name>]" sections, "key = value" lines, "#" comments (whole line, or after
+# whitespace — a "#" glued to a non-space character is not treated as a comment start). No
+# repeated keys: a key reused within the same section (or twice at global scope) is a hard
+# error naming file:lineno, same as a duplicate
 # section header. Writes (config_set/config_unset/config_remove_section) write through a
 # symlinked config file rather than replacing the link, and normalize the whole file to LF line
 # endings even when the original used CRLF.
@@ -21,8 +22,8 @@
 typeset -g  WT_CONFIG_FILE=""
 typeset -gi WT_CONFIG_EXISTS=0
 typeset -g  WT_CONFIG_LOAD_ERROR=""
-typeset -gA WT_CFG WT_PCFG WT_RCFG
-typeset -ga WT_PROJECTS WT_REPOS
+typeset -gA WT_CFG WT_PCFG WT_RCFG WT_ACFG
+typeset -ga WT_PROJECTS WT_REPOS WT_AGENTS
 
 config_file_path() {
   print -r -- "${WORKYTREE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/workytree/config}"
@@ -78,13 +79,13 @@ _config_strip_comment() {
 # broken-but-present config rather than silently overwriting it.
 _config_load_fail() {
   WT_CONFIG_LOAD_ERROR="$1"
-  WT_CFG=() WT_PCFG=() WT_RCFG=() WT_PROJECTS=() WT_REPOS=()
+  WT_CFG=() WT_PCFG=() WT_RCFG=() WT_ACFG=() WT_PROJECTS=() WT_REPOS=() WT_AGENTS=()
 }
 
 config_load() {
   setopt localoptions extendedglob
   WT_CONFIG_FILE="$(config_file_path)"
-  WT_CFG=() WT_PCFG=() WT_RCFG=() WT_PROJECTS=() WT_REPOS=()
+  WT_CFG=() WT_PCFG=() WT_RCFG=() WT_ACFG=() WT_PROJECTS=() WT_REPOS=() WT_AGENTS=()
   WT_CONFIG_EXISTS=0
   WT_CONFIG_LOAD_ERROR=""
   # R41: classify the path BEFORE ever attempting to read it, rather than letting the read
@@ -130,20 +131,26 @@ config_load() {
     (( lineno++ ))
     line="$(_config_strip_comment "${raw%%$'\r'}")"
     [[ -z "${line//[[:space:]]/}" ]] && continue
-    if [[ "$line" =~ '^[[:space:]]*\[[[:space:]]*(project|repo)[[:space:]]+([^]]*)\][[:space:]]*$' ]]; then
+    if [[ "$line" =~ '^[[:space:]]*\[[[:space:]]*(project|repo|agent)[[:space:]]+([^]]*)\][[:space:]]*$' ]]; then
       sect_type="$match[1]"
       sect_name="${${match[2]##[[:space:]]#}%%[[:space:]]#}"
-      if [[ "$sect_type" == project ]]; then
-        if (( ${WT_PROJECTS[(Ie)$sect_name]} )); then
-          _config_load_fail "duplicate [project $sect_name] at $WT_CONFIG_FILE:$lineno"; return 1
-        fi
-        WT_PROJECTS+=("$sect_name")
-      else
-        if (( ${WT_REPOS[(Ie)$sect_name]} )); then
-          _config_load_fail "duplicate [repo $sect_name] at $WT_CONFIG_FILE:$lineno"; return 1
-        fi
-        WT_REPOS+=("$sect_name")
-      fi
+      case "$sect_type" in
+        project)
+          if (( ${WT_PROJECTS[(Ie)$sect_name]} )); then
+            _config_load_fail "duplicate [project $sect_name] at $WT_CONFIG_FILE:$lineno"; return 1
+          fi
+          WT_PROJECTS+=("$sect_name") ;;
+        repo)
+          if (( ${WT_REPOS[(Ie)$sect_name]} )); then
+            _config_load_fail "duplicate [repo $sect_name] at $WT_CONFIG_FILE:$lineno"; return 1
+          fi
+          WT_REPOS+=("$sect_name") ;;
+        agent)
+          if (( ${WT_AGENTS[(Ie)$sect_name]} )); then
+            _config_load_fail "duplicate [agent $sect_name] at $WT_CONFIG_FILE:$lineno"; return 1
+          fi
+          WT_AGENTS+=("$sect_name") ;;
+      esac
       seen_keys=()
       continue
     fi
@@ -157,6 +164,7 @@ config_load() {
         "")      WT_CFG[$key]="$value" ;;
         project) WT_PCFG[$sect_name.$key]="$value" ;;
         repo)    WT_RCFG[$sect_name.$key]="$value" ;;
+        agent)   WT_ACFG[$sect_name.$key]="$value" ;;
       esac
       continue
     fi
@@ -168,9 +176,9 @@ config_load() {
 _config_split_key() {
   local key="$1" rest
   case "$key" in
-    project.*.*|repo.*.*)
+    project.*.*|repo.*.*|agent.*.*)
       REPLY_TYPE="${key%%.*}"; rest="${key#*.}"; REPLY_NAME="${rest%.*}"; REPLY_KEY="${rest##*.}" ;;
-    *.*) usage_error "invalid config key: $key (use <key>, project.<name>.<key>, repo.<name>.<key>)" ;;
+    *.*) usage_error "invalid config key: $key (use <key>, project.<name>.<key>, repo.<name>.<key>, agent.<name>.<key>)" ;;
     *)   REPLY_TYPE="" REPLY_NAME="" REPLY_KEY="$key" ;;
   esac
 }
@@ -182,6 +190,7 @@ config_get() {
   case "$REPLY_TYPE" in
     project) (( ${+WT_PCFG[$REPLY_NAME.$REPLY_KEY]} )) || return 1; v="${WT_PCFG[$REPLY_NAME.$REPLY_KEY]}" ;;
     repo)    (( ${+WT_RCFG[$REPLY_NAME.$REPLY_KEY]} )) || return 1; v="${WT_RCFG[$REPLY_NAME.$REPLY_KEY]}" ;;
+    agent)   (( ${+WT_ACFG[$REPLY_NAME.$REPLY_KEY]} )) || return 1; v="${WT_ACFG[$REPLY_NAME.$REPLY_KEY]}" ;;
     *)       (( ${+WT_CFG[$REPLY_KEY]} )) || return 1; v="${WT_CFG[$REPLY_KEY]}" ;;
   esac
   case "$REPLY_KEY" in
@@ -285,7 +294,7 @@ _config_write() {
   {
     while IFS= read -r line || [[ -n "$line" ]]; do
       line="${line%$'\r'}"
-      if [[ "$line" =~ '^[[:space:]]*\[[[:space:]]*(project|repo)[[:space:]]+([^]]*)\][[:space:]]*$' ]]; then
+      if [[ "$line" =~ '^[[:space:]]*\[[[:space:]]*(project|repo|agent)[[:space:]]+([^]]*)\][[:space:]]*$' ]]; then
         if (( in_target && !done && !delete )); then print -r -- "$key = $value"; done=1; fi
         cur_type="$match[1]"; cur_name="${${match[2]##[[:space:]]#}%%[[:space:]]#}"
         if [[ "$cur_type" == "$want_type" && "$cur_name" == "$want_name" ]]; then in_target=1; seen_target=1; else in_target=0; fi
@@ -342,7 +351,7 @@ config_remove_section() {
   {
     while IFS= read -r line || [[ -n "$line" ]]; do
       line="${line%$'\r'}"
-      if [[ "$line" =~ '^[[:space:]]*\[[[:space:]]*(project|repo)[[:space:]]+([^]]*)\][[:space:]]*$' ]]; then
+      if [[ "$line" =~ '^[[:space:]]*\[[[:space:]]*(project|repo|agent)[[:space:]]+([^]]*)\][[:space:]]*$' ]]; then
         local n="${${match[2]##[[:space:]]#}%%[[:space:]]#}"
         if [[ "$match[1]" == "$want_type" && "$n" == "$want_name" ]]; then skipping=1; continue; else skipping=0; fi
       fi
