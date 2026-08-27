@@ -35,6 +35,22 @@ _workytree_locate_subcommand() {
   print -r -- 0
 }
 
+# _workytree_has_ai_flag <args...>: true if this command line opts into an AI session via
+# --ai. Mirrors cmd_create's own filtering (lib/cmd/create.zsh) token for token: only `--ai`
+# counts, and a `--` ends option parsing so a later `--ai` is a positional, not the flag. If
+# this scan and the CLI's ever disagreed, the wrapper would arm the execution channel for a
+# run the CLI treats as opted out, or leave it unarmed for one the CLI expects to use.
+_workytree_has_ai_flag() {
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --)   return 1 ;;
+      --ai) return 0 ;;
+    esac
+  done
+  return 1
+}
+
 workytree() {
   local -i sub_idx
   sub_idx="$(_workytree_locate_subcommand "$@")"
@@ -74,8 +90,25 @@ workytree() {
   # is rooted at it), so a space or quote character in that path would either split into
   # extra words or break the trap string outright; `${(q)}` is what makes the substitution
   # safe against that.
+  # Arm the channel only when this user has actually opted in. The file the wrapper creates
+  # here is an execution channel -- whatever ends up in it runs in the interactive shell after
+  # the cd -- so creating one on every `create` handed a channel to people who never enabled
+  # the feature: a repo's post-checkout hook, which runs inside `git worktree add`, could find
+  # it by globbing $TMPDIR and get a command run there.
+  #
+  # Unsetting WORKYTREE_AI_RUNFILE from the CLI's environment (bin/workytree) hides the path,
+  # but hiding it is not the same as closing the channel: on Linux a same-user hook can read
+  # the CLI's exec-time environment through /proc/<pid>/environ, and reach an open descriptor
+  # through /proc/<pid>/fd. So no in-process channel can be made unforgeable against a hook
+  # that already runs as the user -- the achievable property is that the channel does not
+  # exist at all unless the feature is in use, which is what this gate provides.
+  #
+  # _WORKYTREE_AI_CONFIGURED is resolved once when this file is sourced, the same shape
+  # _workytree_alias_enabled uses and with the same consequence: changing `ai_session` takes
+  # effect in the next shell. Per-command freshness would mean spawning the CLI an extra time
+  # on every `create`.
   local runfile=""
-  if [[ "$sub" == create ]]; then
+  if [[ "$sub" == create ]] && { (( _WORKYTREE_AI_CONFIGURED )) || _workytree_has_ai_flag "$@" }; then
     runfile="$(command mktemp "${TMPDIR:-/tmp}/workytree-ai.XXXXXX" 2>/dev/null)" || runfile=""
     [[ -n "$runfile" ]] && trap "command rm -f -- ${(q)runfile}" EXIT
   fi
@@ -162,6 +195,13 @@ _workytree_wt_is_ours() {
   unfunction _workytree_wt_probe
   return $(( ! is_ours ))
 }
+
+# Resolved once, here, rather than on every `create`: answering it costs a CLI invocation
+# (it has to read the config, including every [project]'s own ai_session), and the wrapper
+# needs the answer before it decides whether to create the runfile. Fails closed -- a
+# non-zero exit, including a config that will not parse, leaves the channel unarmed.
+typeset -gi _WORKYTREE_AI_CONFIGURED=0
+"$WORKYTREE_BIN" __ai-configured 2>/dev/null && _WORKYTREE_AI_CONFIGURED=1
 
 if _workytree_alias_enabled; then
   if (( $+functions[wt] )); then

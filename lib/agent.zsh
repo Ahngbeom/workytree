@@ -211,3 +211,39 @@ ai_maybe_offer() {
     || warn "ai session skipped: could not write $WT_AI_RUNFILE"
   return 0
 }
+
+# ai_configured_anywhere: rc 0 if this config turns AI sessions on ANYWHERE -- the global
+# ai_session key, or any [project]'s own. The shell wrapper asks this once at startup to
+# decide whether to create a runfile at all (shell/workytree.zsh). A user who never enabled
+# sessions then has no runfile in $TMPDIR for anything else to write into.
+#
+# It deliberately does NOT resolve a repo or a project. That would cost a repo_root scan on
+# every `wt create`, and the answer only has to be a SUPERSET: one project enabling sessions
+# arms the channel for every project, which errs toward the feature working rather than
+# toward it silently not working.
+#
+# Silent by construction. ai_session_mode warns about an unusable value, which is right for a
+# command the user typed and wrong for something that runs on every shell startup -- so this
+# checks the two valid opt-in values directly rather than calling it. An unusable value is
+# simply not an opt-in, which is where ai_session_mode lands for it anyway.
+ai_configured_anywhere() {
+  local p
+  [[ "${WT_CFG[ai_session]:-}" == (ask|always) ]] && return 0
+  for p in "${WT_PROJECTS[@]}"; do
+    [[ "${WT_PCFG[$p.ai_session]:-}" == (ask|always) ]] && return 0
+  done
+  return 1
+}
+
+# cmd___ai-configured: the hidden query behind ai_configured_anywhere. rc 0 = arm the runfile
+# channel, rc 1 = do not. Prints nothing on either stream, ever.
+#
+# Fail closed, and it costs no special case to do so: config_load reacts to a parse failure by
+# resetting every array to empty (lib/config.zsh, R38), so a broken -- or entirely absent --
+# config reaches this function looking exactly like one with nothing configured, and falls out
+# at rc 1. Arming an execution channel off a config we could not parse would be the worst
+# available reading of ambiguous input.
+#
+# Like cmd___complete, this must never fail loudly: it runs on every shell startup, where a
+# stray diagnostic lands in the user's terminal before they have typed anything.
+cmd___ai-configured() { ai_configured_anywhere }

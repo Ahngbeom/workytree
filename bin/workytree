@@ -78,7 +78,7 @@ main() {
   case "$command" in
     help|-h|--help) usage ;;
     --version|version) print -r -- "workytree $WORKYTREE_VERSION" ;;
-    init|create|remove|prune|list|repos|path|cd|project|repo|config|__complete)
+    init|create|remove|prune|list|repos|path|cd|project|repo|config|__complete|__ai-configured)
       (( $+functions[cmd_$command] )) || die "command not implemented yet: $command"
       "cmd_$command" "$@" ;;
     *) usage >&2; usage_error "unknown command: $command" ;;

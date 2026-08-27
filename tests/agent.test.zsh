@@ -490,4 +490,111 @@ HOOK
   assert_eq "$(<"$leak")" "value=[]" "the runfile path must not reach a git hook's environment"
 }
 
+
+# ai_configured_anywhere answers one question for the shell wrapper: has this user turned AI
+# sessions on ANYWHERE in their config? The wrapper uses it to decide whether to arm the
+# runfile channel at all. It deliberately does NOT resolve a repo or a project -- that would
+# cost a scan on every `wt create` -- so it accepts a superset: any project enabling sessions
+# arms the channel for every project. Wrong in the safe direction.
+test_configured_anywhere_false_when_nothing_is_set() {
+  write_config <<'EOF'
+[project w]
+repo_root = ~/a
+worktree_root = ~/b
+EOF
+  config_load
+  assert_exit 1 ai_configured_anywhere
+}
+
+test_configured_anywhere_false_when_explicitly_off() {
+  write_config <<'EOF'
+ai_session = off
+
+[project w]
+repo_root = ~/a
+worktree_root = ~/b
+ai_session = off
+EOF
+  config_load
+  assert_exit 1 ai_configured_anywhere
+}
+
+test_configured_anywhere_true_from_the_global_key() {
+  write_config <<'EOF'
+ai_session = always
+
+[project w]
+repo_root = ~/a
+worktree_root = ~/b
+EOF
+  config_load
+  assert_exit 0 ai_configured_anywhere
+}
+
+test_configured_anywhere_true_from_a_project_only_override() {
+  write_config <<'EOF'
+[project w]
+repo_root = ~/a
+worktree_root = ~/b
+
+[project other]
+repo_root = ~/c
+worktree_root = ~/d
+ai_session = ask
+EOF
+  config_load
+  assert_exit 0 ai_configured_anywhere "a project-only override still arms the channel"
+}
+
+# An unusable ai_session value is not an opt-in. ai_session_mode already warns and falls back
+# to off for these; this must agree with it rather than arming on a typo.
+test_configured_anywhere_false_for_an_invalid_value() {
+  write_config <<'EOF'
+ai_session = maybe
+
+[project w]
+repo_root = ~/a
+worktree_root = ~/b
+EOF
+  config_load
+  assert_exit 1 ai_configured_anywhere
+}
+
+# Fail closed. The wrapper calls this at shell startup, where a broken or absent config is
+# ordinary -- and where arming an execution channel on a config we could not parse would be
+# the worst possible reading of ambiguous input.
+test_ai_configured_subcommand_fails_closed_on_a_broken_config() {
+  write_config <<'EOF'
+[agent claude]
+command = claude
+
+[agent claude]
+command = other
+EOF
+  local out rc
+  out="$(wt __ai-configured 2>&1)"; rc=$?
+  assert_eq "$rc" 1 "a config that fails to parse must not arm the channel"
+  assert_eq "$out" "" "and must stay silent -- this runs on every shell startup"
+}
+
+test_ai_configured_subcommand_is_silent_with_no_config_at_all() {
+  local out rc
+  out="$(wt __ai-configured 2>&1)"; rc=$?
+  assert_eq "$rc" 1
+  assert_eq "$out" ""
+}
+
+test_ai_configured_subcommand_agrees_with_the_library_function() {
+  write_config <<'EOF'
+ai_session = ask
+
+[project w]
+repo_root = ~/a
+worktree_root = ~/b
+EOF
+  assert_exit 0 wt __ai-configured
+  wt config set ai_session off >/dev/null
+  assert_exit 1 wt __ai-configured
+}
+
 run_tests

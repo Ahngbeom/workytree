@@ -91,9 +91,8 @@ position on the command line.
 ## AI sessions (opt-in)
 
 `create` can hand the new worktree straight to an AI coding agent. It is **off by
-default**: no agent is offered, prompted for, or launched until you turn it on. One thing
-is not gated by this: the shell wrapper always prepares the channel it would use to launch
-an agent, on every `create`, whether or not you ever turn the feature on — see "Known
+default**: no agent is offered, prompted for, or launched until you turn it on, and the
+temp file the wrapper would launch it through is not created either. See "Known
 limitations" below.
 
     wt create --ai fix PROJ-1        # this run only
@@ -222,17 +221,29 @@ before you hit a bug.
   instead of the three the config author wrote. And **arguments cannot be empty strings**:
   `--flag ""` cannot be expressed in an `[agent]` profile.
 - **The AI-session launch channel is armed on every `create`, even with the feature off.**
-  The shell wrapper creates a temp file under `$TMPDIR` named `workytree-ai.XXXXXX` on
-  *every* `wt create`, whether or not AI sessions are enabled — it cannot know in advance
-  whether the CLI will want it. After the `cd`, it executes whatever that file contains. The
-  CLI unsets `WORKYTREE_AI_RUNFILE` from the environment before running git, so a
-  `post-checkout` hook can no longer be handed the path directly — but a hook can still find
-  the file by globbing `"$TMPDIR"/workytree-ai.*` and get its command run in the user's
-  interactive shell, foreground and TTY-attached. Verified reproducible. This is not new code
-  execution — a `post-checkout` hook already runs arbitrary code as the user on every
-  `create`, with or without this feature — what changes is the context that code runs in:
-  instead of an unattended, captured subprocess, it lands in the same foreground shell the
-  user is about to type into, after the `cd`.
+  **Turning AI sessions on takes effect in the next shell.** The wrapper works out whether
+  you have enabled them once, when your shell config sources it — answering that question
+  costs a CLI call, and it needs the answer before every `create` — so a shell that was
+  already running keeps the answer it started with. `workytree config set ai_session
+  ask|always` says so when you run it; `--ai` works immediately in any shell, and turning
+  sessions back **off** is honored immediately too, because the CLI re-reads `ai_session` on
+  every run. This is the same trade-off `alias_wt` makes.
+
+- **While AI sessions are on, a repository's `post-checkout` hook can interfere with the
+  launch.** The wrapper creates a temp file under `$TMPDIR` named `workytree-ai.XXXXXX`,
+  and after the `cd` it runs whatever that file contains. Only opted-in runs create one
+  (`--ai`, or `ai_session` set to `ask`/`always` somewhere in your config), so a user who
+  never enables the feature has no such file for anything to find. When you have enabled
+  it, a hook — which runs inside `git worktree add`, before the launch — can locate the
+  file by globbing and put its own command there.
+
+  This is not new code execution: a `post-checkout` hook already runs arbitrary code as you
+  on every `create`, feature or no feature. What changes is the context, from an unattended
+  captured subprocess to the foreground shell you are about to type into. It also cannot be
+  closed by hiding the path or the descriptor — on Linux a same-user process can read
+  another's exec-time environment through `/proc/<pid>/environ` and reach its open files
+  through `/proc/<pid>/fd` — so the channel existing only for opted-in runs is the property
+  workytree can actually offer, not a step toward a stronger one.
 
 ## Development
 

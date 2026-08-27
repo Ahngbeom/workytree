@@ -9,9 +9,18 @@ SHELL_FILE="$WT_TEST_ROOT/shell/workytree.zsh"
 # aborted" on both stdout+stderr (2>&1 below), polluting every captured assertion. $ZDOTDIR/.zshrc
 # (the only rc file this test suite relies on) still loads with -d -- only the SYSTEM-wide rc is
 # skipped.
+# TMPDIR is isolated per interactive shell rather than exported from a test body. Test
+# functions all share one process and setup_env never resets TMPDIR, so an exported value
+# outlives the $TMP_ROOT it names -- teardown_env then deletes that directory, and every
+# later test in the file is left pointing mktemp at a path that no longer exists. Setting it
+# here, inside the shell under test, keeps each run's temp files in its own sandbox and lets
+# no test hand a stale TMPDIR to the next one.
 zsh_i() {
   export ZDOTDIR="$HOME"
-  print -r -- "source '$SHELL_FILE'" > "$ZDOTDIR/.zshrc"
+  {
+    print -r -- "export TMPDIR='$TMP_ROOT'"
+    print -r -- "source '$SHELL_FILE'"
+  } > "$ZDOTDIR/.zshrc"
   zsh -d -i -c "$1" 2>&1
 }
 
@@ -230,7 +239,6 @@ test_agent_exit_code_does_not_fail_create() {
 # reasons unrelated to this test.
 test_runfile_is_removed_after_the_run() {
   fixture; fake_claude
-  export TMPDIR="$TMP_ROOT"
   local out
   out="$(zsh_i 'wt create app fix PROJ-1 main --ai -y; ls "${TMPDIR:-/tmp}" | grep -c "^workytree-ai\." || true')"
   assert_contains "$out" "AGENT-RAN"
@@ -246,10 +254,9 @@ test_runfile_is_removed_after_the_run() {
 # exercises exactly that path, so it never caught this. An ordinary `create` with no `--ai`
 # still mktemps a runfile (the wrapper can't know in advance whether the CLI will use it)
 # but never writes or removes it via that explicit rm, so cleanup depends entirely on the
-# trap. Same TMPDIR isolation as the test above, for the same reason.
+# trap. TMPDIR isolation comes from zsh_i, see its comment.
 test_runfile_is_removed_without_ai() {
   fixture
-  export TMPDIR="$TMP_ROOT"
   local out
   out="$(zsh_i 'wt create app fix PROJ-1 main -y; ls "${TMPDIR:-/tmp}" | grep -c "^workytree-ai\." || true')"
   assert_eq "${out##*$'\n'}" "0" "no runfile left behind on a plain create without --ai"
@@ -317,6 +324,73 @@ EOF
   assert_eq "${args[1]}" "--bare"
   assert_eq "${args[2]}" "hello there" "the quoted, space-containing element arrived as ONE argument with no quote characters"
   assert_eq "${args[3]}" "--flag"
+}
+
+
+
+# A hook cannot be simulated after the fact -- it has to observe the file WHILE the CLI runs.
+# post-checkout fires inside `git worktree add`, exactly the window a real attack would use.
+# hook_probe_runfile: install a post-checkout hook that reports whether a runfile exists at
+# the moment `git worktree add` runs it, and return that verdict. This is the only window in
+# which "the channel was never armed" is observable at all -- checking $TMPDIR after the
+# command returns cannot tell "never created" apart from "created, then cleaned up", and a
+# real hostile hook would be looking in exactly this window.
+hook_probe_runfile() {
+  mkdir -p "$HOME/src/app/.git/hooks"
+  cat > "$HOME/src/app/.git/hooks/post-checkout" <<'HOOK'
+#!/bin/sh
+for f in "$TMPDIR"/workytree-ai.*; do
+  [ -e "$f" ] || continue
+  echo "HOOK-FOUND-RUNFILE" >&2
+done
+exit 0
+HOOK
+  chmod +x "$HOME/src/app/.git/hooks/post-checkout"
+}
+
+test_hook_cannot_find_a_runfile_when_sessions_are_not_configured() {
+  fixture; hook_probe_runfile
+  local out
+  out="$(zsh_i 'wt create app fix PROJ-1 main -y')"
+  assert_eq "${out#*HOOK-FOUND-RUNFILE}" "$out" "an unconfigured user's create never arms the channel"
+}
+
+# The wrapper decides whether to arm the channel by scanning the command line for --ai, and
+# that scan has to agree with the CLI's own parsing or the two disagree about whether this run
+# opted in. `--` ends option parsing for create (lib/cmd/create.zsh), so a literal --ai after
+# it is a repo name, not the flag.
+#
+# This exercises the scan directly rather than through a real `create`: a create whose repo
+# name is `--ai` fails before `git worktree add` ever runs, so the post-checkout probe used
+# above would have nothing to observe and would pass no matter what the wrapper decided.
+test_ai_flag_scan_matches_the_cli_parsing() {
+  fixture
+  local out
+  out="$(zsh_i '
+    for a in "create app fix PROJ-1" "create --ai app fix" "create app fix PROJ-1 --ai" "create -- --ai fix" "create --ai -- x"; do
+      _workytree_has_ai_flag ${=a} && print "$a -> ARMED" || print "$a -> NOT-ARMED"
+    done')"
+  assert_contains "$out" "create app fix PROJ-1 -> NOT-ARMED"
+  assert_contains "$out" "create --ai app fix -> ARMED"
+  assert_contains "$out" "create app fix PROJ-1 --ai -> ARMED"
+  assert_contains "$out" "create -- --ai fix -> NOT-ARMED" "-- makes a following --ai a positional"
+  assert_contains "$out" "create --ai -- x -> ARMED" "--ai before -- is still the flag"
+}
+
+test_ai_flag_arms_the_channel_even_when_config_says_nothing() {
+  fixture; fake_claude
+  local out
+  out="$(zsh_i 'wt create app fix PROJ-1 main --ai -y')"
+  assert_contains "$out" "AGENT-RAN" "--ai arms the channel on its own"
+}
+
+
+test_configured_session_arms_the_channel_without_the_flag() {
+  fixture; fake_claude
+  wt config set ai_session always >/dev/null
+  local out
+  out="$(zsh_i 'wt create app fix PROJ-1 main -y')"
+  assert_contains "$out" "AGENT-RAN" "ai_session = always arms it with no flag"
 }
 
 run_tests

@@ -713,4 +713,62 @@ EOF
   assert_eq "${WT_AGENTS[1]}" "claude"
 }
 
+
+# The shell wrapper resolves "are AI sessions on?" once when it is sourced, so turning them on
+# does not take effect in shells that are already running. That is the same trade-off alias_wt
+# makes, but alias_wt is set once at install time while ai_session is something a user changes
+# mid-session -- and the failure it produces is silent: `wt create` simply does not open a
+# session, with nothing to indicate why. The hint is the only thing standing between that and
+# a confusing bug report.
+test_setting_ai_session_hints_that_a_new_shell_is_needed() {
+  write_config <<'EOF'
+[project fd]
+repo_root = ~/a
+worktree_root = ~/b
+EOF
+  local out
+  out="$(wt config set ai_session always 2>&1)"
+  assert_contains "$out" "set ai_session = always"
+  assert_contains "$out" "new shell" "turning sessions on must say the running shell will not see it"
+}
+
+test_setting_ai_session_per_project_hints_too() {
+  write_config <<'EOF'
+[project fd]
+repo_root = ~/a
+worktree_root = ~/b
+EOF
+  local out
+  out="$(wt config set project.fd.ai_session ask 2>&1)"
+  assert_contains "$out" "new shell"
+}
+
+# The hint is about arming the channel. Turning sessions OFF needs no new shell to be safe --
+# the CLI re-reads ai_session on every run, so `off` takes effect immediately even though the
+# wrapper still creates a runfile until the shell is replaced.
+test_setting_ai_session_off_does_not_hint() {
+  write_config <<'EOF'
+ai_session = always
+
+[project fd]
+repo_root = ~/a
+worktree_root = ~/b
+EOF
+  local out
+  out="$(wt config set ai_session off 2>&1)"
+  assert_contains "$out" "set ai_session = off"
+  assert_eq "${out#*new shell}" "$out" "turning it off needs no new shell"
+}
+
+test_unrelated_keys_do_not_hint() {
+  write_config <<'EOF'
+[project fd]
+repo_root = ~/a
+worktree_root = ~/b
+EOF
+  local out
+  out="$(wt config set default_project fd 2>&1)"
+  assert_eq "${out#*new shell}" "$out"
+}
+
 run_tests

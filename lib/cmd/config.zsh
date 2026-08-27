@@ -26,7 +26,23 @@ cmd_config() {
           config_get "$1" || { error "config key not set: $1"; exit 1; } ;;
     set)  require_loadable_config
           [[ $# -eq 2 ]] || usage_error "usage: workytree config set <key> <value>"
-          config_set "$1" "$2"; success "set $1 = $2" ;;
+          config_set "$1" "$2"; success "set $1 = $2"
+          # Turning AI sessions ON needs a new shell before it takes effect. The wrapper
+          # resolves that question once, when it is sourced (shell/workytree.zsh), because the
+          # answer costs a CLI invocation and it needs it before deciding whether to create the
+          # runfile at all. Without this hint the failure is silent and easy to misread as the
+          # feature being broken: `wt create` just does not open a session, in the very shell
+          # where the user has only now switched it on.
+          #
+          # Only for turning it ON. `off` is honored immediately -- the CLI re-reads ai_session
+          # on every run -- so saying "open a new shell" there would be noise about nothing.
+          #
+          # An `if`, not `[[ ... ]] && warn`: this is the last command in the branch, so a
+          # false test would become `config set`'s own exit status and report failure for a
+          # write that succeeded.
+          if [[ "${1##*.}" == ai_session && "$2" == (ask|always) ]]; then
+            warn "open a new shell (or re-source your shell config) before this takes effect"
+          fi ;;
     # R41: `-e` (not `-f`) guards the touch-create -- a directory or other non-regular
     # occupant at the config path is left alone rather than attempting `: > "$f"` against
     # it (which would fail with a raw "is a directory" diagnostic before ever reaching the
