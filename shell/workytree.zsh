@@ -57,7 +57,7 @@ workytree() {
   local sub=""
   (( sub_idx > 0 )) && sub="${@[$sub_idx]}"
   case "$sub" in
-    create|cd) ;;
+    create|cd|remove) ;;
     *) "$WORKYTREE_BIN" "$@"; return $? ;;
   esac
   local -a call_args; call_args=("$@")
@@ -116,6 +116,8 @@ workytree() {
   local output exit_code target head
   if [[ -n "$runfile" ]]; then
     output="$(WORKYTREE_AI_RUNFILE="$runfile" "$WORKYTREE_BIN" "${call_args[@]}")"
+  elif [[ "$sub" == remove && -o interactive ]]; then
+    output="$(WORKYTREE_CD_CAPABLE=1 "$WORKYTREE_BIN" "${call_args[@]}")"
   else
     output="$("$WORKYTREE_BIN" "${call_args[@]}")"
   fi

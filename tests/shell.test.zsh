@@ -127,6 +127,25 @@ test_create_cds_into_worktree() {
   assert_eq "$(zsh_i 'wt cd app >/dev/null; pwd')" "$HOME/src/app"
 }
 
+test_remove_from_inside_worktree_cds_to_repo() {
+  fixture
+  wt create app fix RM main -y >/dev/null 2>&1
+  assert_eq "$(zsh_i 'cd ~/wts/app/fix/RM; wt remove app fix RM </dev/null >/dev/null 2>&1; pwd')" "$HOME/src/app"
+  assert_not_exists "$HOME/wts/app/fix/RM"
+}
+
+test_remove_to_flag_cds_there() {
+  fixture
+  wt create app fix RM main -y >/dev/null 2>&1
+  assert_eq "$(zsh_i 'wt remove app fix RM --to ~ </dev/null >/dev/null 2>&1; pwd')" "$HOME"
+}
+
+test_remove_progress_reaches_terminal_through_wrapper() {
+  fixture
+  wt create app fix RM main -y >/dev/null 2>&1
+  assert_contains "$(zsh_i 'wt remove app fix RM </dev/null')" "1/1 removing worktree"
+}
+
 test_failure_keeps_cwd_and_exit_code() {
   fixture
   local out; out="$(zsh_i "cd $HOME; wt create ghost fix T -y; echo rc=\$?; pwd")"

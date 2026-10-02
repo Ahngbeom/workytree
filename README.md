@@ -73,7 +73,9 @@ whatever your deepest repo needs) or register the deep repo directly with `worky
     wt create server fix PROJ-1 origin/develop -y
     wt cd server fix PROJ-1
     wt list [repo] · wt repos · wt path [repo [kind [ticket]]]
-    wt remove server fix PROJ-1 [--force] [-b|-B]
+    wt remove                       # interactive: pick a worktree → branches → destination → confirm
+    wt remove server fix PROJ-1      # interactive: branches → destination → confirm
+    wt remove server fix PROJ-1 [--force] [-b|-B] [-r] [--to <dir>] -y
     wt prune [repo]
     wt project add <name> <repo_root> <worktree_root>
     wt repo add <path> [--name n] [--project p]
@@ -87,6 +89,33 @@ already in it) — register the one you want under a distinct alias with `workyt
 <path> --name <alias>` instead.
 `--project`, `--yes`/`-y`, and `--no-color` are global options and are accepted in any
 position on the command line.
+
+## Removing a worktree
+
+Run from a terminal, `remove` asks before it touches anything beyond the worktree itself:
+
+0. which worktree, when `repo`, `kind` or `ticket` is left out — the ones given narrow the
+   list, and the worktree you are standing in is offered first
+1. whether to discard uncommitted changes, if there are any (otherwise it stops and suggests
+   `git stash -u` or `--force`)
+2. whether to delete the local branch — defaults to yes when it is merged; an unmerged branch
+   needs a second, explicit yes to force-delete
+3. whether to delete the remote branch, when one is known (its upstream, or a same-named
+   `refs/remotes/<remote>/` ref, checked right after a `git fetch --prune origin`) — defaults
+   to no, since it pushes a delete
+4. where to go afterwards — only through the shell integration, which is what can `cd`
+5. a plan summary and `Proceed?`
+
+`create` fetches `origin` the same way before it branches, so an auto-detected base such as
+`origin/main` is current. Both skip the fetch when there is no `origin`, and carry on with
+the local refs (after a warning) when it fails.
+
+Each `remove` step then shows a progress bar, failures come with `hint:` lines, and a summary lists
+what was removed, deleted, kept, or failed. With `-y`, or without a terminal, nothing is
+asked: the flags decide (`-b`/`-B` local branch, `-r` remote branch, `--to <dir>`
+destination). Removing the worktree you are standing in moves you to the source repo unless
+`--to` says otherwise. A branch delete that fails is reported but does not change the exit
+code, because the worktree is already gone by then.
 
 ## AI sessions (opt-in)
 
@@ -164,7 +193,8 @@ before you hit a bug.
   is safe to delete by asking git (`git status`) whether it's dirty. Anything gitignored —
   `.env`, `node_modules`, build output — is invisible to `git status` by definition, so a
   worktree holding nothing but gitignored files reads as perfectly clean and `remove` deletes
-  it outright: exit 0, no `--force` needed, no confirmation, no mention of what was inside.
+  it outright: exit 0, no `--force` needed, no mention of what was inside (the interactive
+  `Proceed?` summary lists branches, not files).
   This matches `git worktree remove`'s own behavior and is not a bug workytree fixes — but a
   `.env` that exists nowhere else is gone the moment you run `remove`. Back up anything
   gitignored you care about before removing a worktree.

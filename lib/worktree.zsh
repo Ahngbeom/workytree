@@ -131,3 +131,18 @@ dir_is_cruft_only() {
   rm -f "$out_file"
   return 0
 }
+
+# wt_fetch_origin <repo_path>: refresh origin's tracking refs, pruning ones deleted upstream.
+# Best-effort: with no origin it does nothing, and a failed fetch warns and leaves the local
+# refs as they were. GIT_TERMINAL_PROMPT=0 turns a missing HTTPS credential into that
+# warning instead of stopping create/remove to ask for a password mid-run.
+wt_fetch_origin() {
+  local repo_path="$1" out
+  git -C "$repo_path" remote get-url origin >/dev/null 2>&1 || return 0
+  dim "fetching origin…" >&2
+  out="$(GIT_TERMINAL_PROMPT=0 git -C "$repo_path" fetch --prune --quiet origin 2>&1)" && return 0
+  warn "could not fetch origin; continuing with local refs. git said:"
+  _wt_indent_and_cap "$out" >&2
+  hint "check the network and your credentials, then try: git -C $repo_path fetch origin"
+  return 1
+}

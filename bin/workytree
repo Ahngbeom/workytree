@@ -25,6 +25,10 @@ typeset -g WORKYTREE_HOME="${0:A:h:h}"   # :A resolves the ~/.local/bin symlink
 # export attribute unconditionally, regardless of what the caller's shell had set.
 typeset -g +x WT_AI_RUNFILE="${WORKYTREE_AI_RUNFILE:-}"
 unset WORKYTREE_AI_RUNFILE
+# Set by shell/workytree.zsh only when it will cd to the path `remove` prints last.
+typeset -gi +x WT_CAN_CD=0
+[[ "${WORKYTREE_CD_CAPABLE:-}" == 1 ]] && WT_CAN_CD=1
+unset WORKYTREE_CD_CAPABLE
 
 typeset -g  WT_PROJECT_OPT=""
 typeset -gi WT_YES=0
@@ -41,7 +45,8 @@ Usage: workytree <command> [args] [--project <name>] [--yes|-y] [--no-color]
 
   workytree init [name repo_root worktree_root]          interactive first-time setup
   workytree create [--ai] [repo] [kind] [ticket] [base]  create (or reuse) a worktree; asks for missing args
-  workytree remove <repo> <kind> <ticket> [--force] [-b|--branch] [-B|--branch-force]
+  workytree remove [repo] [kind] [ticket] [--force] [-b|--branch] [-B|--branch-force]
+                  [-r|--remote] [--to <dir>]                picks a worktree and asks about branches/destination when interactive
   workytree prune [repo]                                 prune stale refs + orphan dirs
   workytree list [repo]                                  git worktree list per repo
   workytree repos                                        repos across all projects
