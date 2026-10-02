@@ -112,4 +112,54 @@ test_create_base_ref_with_space_is_not_silently_truncated() {
   assert_not_exists "$HOME/wts/app/chore/SPC"
 }
 
+# origin_fixture: app tracks origin/main on a bare remote that is one commit ahead of the
+# local remote-tracking ref.
+origin_fixture() {
+  make_repo "$HOME/src/app"
+  git clone -q --bare "$HOME/src/app" "$HOME/remote.git"
+  git -C "$HOME/src/app" remote add origin "$HOME/remote.git"
+  git -C "$HOME/src/app" fetch -q origin
+  git -C "$HOME/src/app" branch -q -u origin/main main
+  git clone -q "$HOME/remote.git" "$HOME/other"
+  print new > "$HOME/other/new.txt"; git -C "$HOME/other" add -A; git -C "$HOME/other" commit -qm ahead
+  git -C "$HOME/other" push -q origin main
+  write_config <<EOF
+[project me]
+repo_root = ~/src
+worktree_root = ~/wts
+EOF
+}
+
+test_create_fetches_origin_before_branching() {
+  origin_fixture
+  local out; out="$(wt create app fix F -y 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$out" "fetching origin"
+  assert_eq "$(git -C "$HOME/wts/app/fix/F" rev-parse HEAD)" "$(git -C "$HOME/other" rev-parse HEAD)" "branched from the fetched origin/main"
+}
+
+test_create_survives_unreachable_origin() {
+  origin_fixture; mv "$HOME/remote.git" "$HOME/remote-moved.git"
+  local out; out="$(wt create app fix F -y 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$out" "could not fetch origin"
+  assert_dir "$HOME/wts/app/fix/F"
+}
+
+test_create_without_origin_does_not_fetch() {
+  make_repo "$HOME/src/app"
+  write_config <<EOF
+[project me]
+repo_root = ~/src
+worktree_root = ~/wts
+EOF
+  local out; out="$(wt create app fix F main 2>&1)"
+  assert_eq "${out//fetching/}" "$out" "no origin, no fetch"
+}
+
+test_create_last_stdout_line_is_still_the_path_after_fetch() {
+  origin_fixture
+  assert_eq "$(wt create app fix F -y 2>/dev/null | tail -1)" "$HOME/wts/app/fix/F"
+}
+
 run_tests

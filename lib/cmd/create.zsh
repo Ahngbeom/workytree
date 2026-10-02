@@ -144,6 +144,7 @@ cmd_create() {
   fi
 
   local target; target="$(worktree_path "$project" "$repo" "$kind" "$ticket")"
+  [[ -e "$target" ]] || wt_fetch_origin "$repo_path"
   # base_ref/base_label split: see the note on create_do (R22).
   local base_ref="$base" base_label="$base"
   if [[ -z "$base_ref" && ! -e "$target" ]] && ! git -C "$repo_path" show-ref --verify --quiet "refs/heads/$(wt_branch_name "$kind" "$ticket")"; then
