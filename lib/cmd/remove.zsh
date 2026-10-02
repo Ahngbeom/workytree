@@ -17,16 +17,18 @@ remove_branch() {
 }
 
 # _wt_remote_branch <repo_path> <branch>: reply=(remote remote_branch) for the branch's remote
-# counterpart -- its upstream, else the first remote (origin first) holding a same-named
-# tracking ref. Must run before the local branch is deleted: that also deletes its upstream
+# counterpart -- its upstream while that tracking ref still exists (a remotely deleted upstream
+# stays configured after `fetch --prune`), else the first remote (origin first) holding a
+# same-named tracking ref. Must run before the local branch is deleted: that also deletes its upstream
 # config, and the lookup would then silently fall back to name matching.
 _wt_remote_branch() {
-  local repo_path="$1" branch="$2" up r
+  local repo_path="$1" branch="$2" up r ref
   local -a remotes
   reply=()
-  up="$(git -C "$repo_path" for-each-ref --format='%(upstream:remotename)%09%(upstream:lstrip=3)' "refs/heads/$branch" 2>/dev/null)"
-  if [[ -n "${up%%$'\t'*}" && "${up%%$'\t'*}" != . && -n "${up#*$'\t'}" ]]; then
-    reply=("${up%%$'\t'*}" "${up#*$'\t'}"); return 0
+  up="$(git -C "$repo_path" for-each-ref --format='%(upstream:remotename)%09%(upstream)' "refs/heads/$branch" 2>/dev/null)"
+  r="${up%%$'\t'*}" ref="${up#*$'\t'}"
+  if [[ -n "$r" && "$ref" == "refs/remotes/$r/"?* ]] && git -C "$repo_path" show-ref --verify --quiet "$ref"; then
+    reply=("$r" "${ref#refs/remotes/$r/}"); return 0
   fi
   remotes=( ${(f)"$(git -C "$repo_path" remote 2>/dev/null)"} )
   (( ${remotes[(Ie)origin]} )) && remotes=(origin "${(@)remotes:#origin}")
@@ -49,20 +51,33 @@ remove_remote_branch() {
 
 _rm_is_inside() { [[ "${1:A}/" == "${2:A}/"* ]]; }
 
+# _rm_ticket_dirs <dir> <prefix>: ticket paths under a kind directory. A directory holding a
+# .git FILE is a linked worktree and ends the descent (its submodules hold .git files too); one
+# holding a .git directory is some other checkout and is skipped; anything else is a segment
+# of a ticket containing "/".
+_rm_ticket_dirs() {
+  local d
+  for d in "$1"/*(N/); do
+    if [[ -f "$d/.git" ]]; then print -r -- "$2${d:t}"
+    elif [[ ! -e "$d/.git" ]]; then _rm_ticket_dirs "$d" "$2${d:t}/"; fi
+  done
+}
+
 # _rm_managed_worktrees [repo] [kind]: "project<TAB>repo<TAB>kind<TAB>ticket" for each linked
-# worktree (a directory holding a .git file) at <worktree_root>/<repo>/<kind>/<ticket>.
+# worktree at <worktree_root>/<repo>/<kind>/<ticket>.
 _rm_managed_worktrees() {
-  local rpat="${1:+${(b)1}}" kpat="${2:+${(b)2}}" p root d rel
+  local rpat="${1:+${(b)1}}" kpat="${2:+${(b)2}}" p root d rel t
   local -a projects
   projects=("${WT_PROJECTS[@]}")
   [[ -n "$WT_PROJECT_OPT" ]] && projects=("$WT_PROJECT_OPT")
   for p in "${projects[@]}"; do
     root="$(project_worktree_root "$p")"
     [[ -n "$root" && -d "$root" ]] || continue
-    for d in "$root"/${~rpat:-*}/${~kpat:-*}/*(N/); do
-      [[ -f "$d/.git" ]] || continue
+    for d in "$root"/${~rpat:-*}/${~kpat:-*}(N/); do
       rel="${d#$root/}"
-      print -r -- "$p"$'\t'"${rel%%/*}"$'\t'"${${rel#*/}%%/*}"$'\t'"${rel##*/}"
+      for t in ${(f)"$(_rm_ticket_dirs "$d" "")"}; do
+        print -r -- "$p"$'\t'"${rel%%/*}"$'\t'"${rel#*/}"$'\t'"$t"
+      done
     done
   done
 }
@@ -249,7 +264,13 @@ cmd_remove() {
     _wt_remote_branch "$repo_path" "$branch" && { remote="${reply[1]}" rbranch="${reply[2]}"; }
   fi
   local -i merged=0
-  [[ -n "$branch" ]] && git -C "$repo_path" merge-base --is-ancestor "refs/heads/$branch" HEAD 2>/dev/null && merged=1
+  local merged_into=HEAD up_ref
+  if [[ -n "$branch" ]]; then
+    # The reference `git branch -d` checks: the upstream when it exists, else HEAD.
+    up_ref="$(git -C "$repo_path" for-each-ref --format='%(upstream)' "refs/heads/$branch" 2>/dev/null)"
+    [[ -n "$up_ref" ]] && git -C "$repo_path" show-ref --verify --quiet "$up_ref" && merged_into="$up_ref"
+    git -C "$repo_path" merge-base --is-ancestor "refs/heads/$branch" "$merged_into" 2>/dev/null && merged=1
+  fi
 
   if (( interactive )) && [[ -n "$branch" ]]; then
     if (( ! delete_branch )); then

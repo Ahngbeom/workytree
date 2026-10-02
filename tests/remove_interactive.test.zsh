@@ -258,4 +258,53 @@ CFG
   assert_dir "$HOME/wts/app/fix/A"
 }
 
+# An upstream deleted on the remote stays configured after `fetch --prune` (track: [gone]);
+# it must not be offered for deletion, nor pushed to with -r.
+test_gone_upstream_is_not_offered() {
+  fixture
+  git -C "$HOME/src/app" branch -q -u origin/fix/T fix/T
+  git -C "$HOME/remote.git" branch -D fix/T >/dev/null
+  answers "n" ""
+  local out; out="$(wt remove app fix T 2>&1)"
+  assert_eq "$?" 0
+  assert_eq "${out//delete remote branch/}" "$out" "gone upstream must not be offered"
+}
+
+test_gone_upstream_with_remote_flag_skips_push() {
+  fixture
+  git -C "$HOME/src/app" branch -q -u origin/fix/T fix/T
+  git -C "$HOME/remote.git" branch -D fix/T >/dev/null
+  local out; out="$(wt remove app fix T -r 2>&1)"
+  assert_contains "$out" "no remote branch known"
+  assert_eq "${out//failed to delete remote branch/}" "$out" "no doomed push"
+}
+
+# `git branch -d` judges "merged" against the upstream when one exists: a branch fully pushed
+# to its upstream but not merged into the repo's HEAD is deletable without force.
+test_branch_published_to_upstream_counts_as_merged() {
+  fixture
+  print y > "$WT/f"; git -C "$WT" add -A; git -C "$WT" commit -qm c
+  git -C "$WT" push -q -u origin fix/T 2>/dev/null
+  answers "" "n" ""
+  local out; out="$(wt remove app fix T 2>&1)"
+  assert_contains "$out" "(merged)"
+  assert_eq "${out//unmerged/}" "$out" "no force prompt"
+  assert_eq "$(local_branch fix/T)" ""
+}
+
+# create accepts a ticket containing "/", nesting the worktree one level deeper.
+test_picker_finds_ticket_with_slash() {
+  fixture
+  wt create app feature team/X main >/dev/null 2>&1
+  mkdir -p "$WT/sub"; print "gitdir: elsewhere" > "$WT/sub/.git"   # submodule-like, inside a worktree
+  answers "1" "n" ""
+  local out; out="$(wt remove app feature 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$out" "app  feature/team/X"
+  assert_not_exists "$HOME/wts/app/feature/team/X"
+  answers ""
+  out="$(wt remove app fix 2>&1)"
+  assert_eq "${out//T\/sub/}" "$out" "never descends into a worktree"
+}
+
 run_tests
