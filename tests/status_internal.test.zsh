@@ -3,6 +3,7 @@
 source "${0:A:h}/helpers.zsh"
 for f in ui config resolve worktree forge status; do source "$WT_TEST_ROOT/lib/$f.zsh"; done
 source "$WT_TEST_ROOT/lib/cmd/prune.zsh"
+source "$WT_TEST_ROOT/lib/cmd/status.zsh"
 
 test_fmt_age_boundaries() {
   status_fmt_age 0; assert_eq "$REPLY" "<1h"
@@ -72,6 +73,60 @@ test_base_counts_without_ahead_behind_support() {
   assert_eq "${f[8]}" topic
   assert_eq "${f[19]} ${f[20]}" "2 0" base-ahead-behind
   assert_eq "${f[9]}" dirty local-only-commits
+}
+
+test_json_string_escaping() {
+  _status_jstr 'a"b\c';     assert_eq "$REPLY" '"a\"b\\c"'
+  _status_jstr $'x\ty\nz';  assert_eq "$REPLY" '"x\u0009y\u000az"'
+  _status_jstr -;           assert_eq "$REPLY" null
+}
+
+# in_subshell <cmd...>: usage_error exits; keep that exit out of the test process.
+in_subshell() { ( "$@" ) }
+
+test_parse_opts() {
+  _status_parse_opts app --stale 7 --json
+  assert_eq "$ST_REPO $ST_STALE_FILTER $ST_STALE_DAYS $ST_JSON" "app 1 7 1"
+  _status_parse_opts --stale
+  assert_eq "$ST_STALE_FILTER $ST_STALE_DAYS" "1 -1"
+  assert_exit 2 in_subshell _status_parse_opts --fetch --offline
+  assert_exit 2 in_subshell _status_parse_opts a b
+  assert_exit 2 in_subshell _status_parse_opts --bogus
+}
+
+test_stale_days_from_config_and_override() {
+  typeset -gA WT_CFG=(stale_days 10) WT_PCFG=(me.stale_days 5)
+  ST_STALE_DAYS=-1
+  assert_eq "$(status_stale_days me)" 5
+  assert_eq "$(status_stale_days other)" 10
+  WT_CFG[stale_days]=soon
+  assert_eq "$(status_stale_days other 2>/dev/null)" 30
+  ST_STALE_DAYS=0
+  assert_eq "$(status_stale_days me)" 0
+  ST_STALE_DAYS=-1
+}
+
+# More repos than WT_STATUS_MAX_JOBS run in batches; output stays in config order.
+test_collect_keeps_config_order_across_batches() {
+  local n
+  for n in a b c d e; do make_repo "$HOME/src/$n"; done
+  typeset -ga WT_PROJECTS=(me)
+  typeset -gA WT_PCFG=(me.repo_root "$HOME/src" me.worktree_root "$HOME/wts") WT_CFG=() WT_RCFG=()
+  WT_STATUS_MAX_JOBS=2 ST_OFFLINE=1 ST_FETCH=0 ST_REPO='' ST_PROGRESS=0 ST_STALE_DAYS=-1
+  local out; out="$(_status_collect "$HOME/notes" | cut -f3 | tr '\n' ' ')"
+  assert_eq "$out" "a b c d e "
+  WT_STATUS_MAX_JOBS=8 ST_OFFLINE=0
+}
+
+test_sort_groups_types_then_oldest_first_with_main_checkouts_last() {
+  local t=$'\t' d='-'
+  local rows="branch${t}p${t}r${t}rp${t}-${t}-${t}-${t}b1${t}-${t}-${t}-${t}-${t}200
+worktree${t}p${t}r${t}rp${t}/w2${t}-${t}-${t}w2${t}-${t}-${t}50${t}-${t}-
+orphan${t}p${t}r${t}rp${t}/o${t}-${t}-${t}-${t}-${t}-${t}10${t}-${t}-
+worktree${t}p${t}r${t}rp${t}/w1${t}-${t}-${t}w1${t}-${t}-${t}40${t}-${t}-
+branch${t}p${t}r${t}rp${t}-${t}-${t}-${t}b2${t}-${t}-${t}-${t}-${t}100
+main${t}p${t}r${t}rp${t}/m${t}-${t}-${t}m${t}-${t}-${t}1${t}-${t}-"
+  assert_eq "$(_status_sort <<< "$rows" | cut -f1,8 | tr '\t\n' ': ')" "worktree:w1 worktree:w2 branch:b2 branch:b1 orphan:- main:m "
 }
 
 run_tests

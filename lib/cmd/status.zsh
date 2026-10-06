@@ -1,0 +1,309 @@
+# `status`: worktree/branch overview across the configured workspace. lib/status.zsh collects
+# and judges one repo; this file runs those collectors in parallel and renders the result as
+# a table, JSON, or an fzf list whose keys hand off to `remove`, the browser, and the shell
+# wrapper's cd.
+
+typeset -gi WT_STATUS_MAX_JOBS=8
+typeset -g  WT_STATUS_FZF_MIN=0.38
+typeset -g  ST_REPO='' ST_HEADER=''
+typeset -gi ST_FETCH=0 ST_OFFLINE=0 ST_STALE_FILTER=0 ST_STALE_DAYS=-1 ST_JSON=0 ST_PLAIN=0 ST_PROGRESS=0
+typeset -ga ST_RECS ST_LINES
+
+_status_parse_opts() {
+  ST_REPO='' ST_FETCH=0 ST_OFFLINE=0 ST_STALE_FILTER=0 ST_STALE_DAYS=-1 ST_JSON=0 ST_PLAIN=0
+  while (( $# )); do
+    case "$1" in
+      --fetch)   ST_FETCH=1 ;;
+      --offline) ST_OFFLINE=1 ;;
+      --stale)
+        ST_STALE_FILTER=1
+        [[ "${2:-}" == <-> ]] && { ST_STALE_DAYS=$2; shift; } ;;
+      --json)    ST_JSON=1 ;;
+      --plain)   ST_PLAIN=1 ;;
+      -*|*$'\t'*) usage_error "usage: workytree status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain]" ;;
+      *)
+        [[ -z "$ST_REPO" ]] || usage_error "usage: workytree status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain]"
+        ST_REPO="$1" ;;
+    esac
+    shift
+  done
+  (( ST_FETCH && ST_OFFLINE )) && usage_error "--fetch and --offline cannot be combined"
+  return 0
+}
+
+# status_stale_days <project>: --stale <days> if given, else stale_days ([project] -> global),
+# else 30.
+status_stale_days() {
+  (( ST_STALE_DAYS >= 0 )) && { print -r -- $ST_STALE_DAYS; return; }
+  local v
+  v="$(project_setting "$1" stale_days)" || { print -r -- 30; return; }
+  [[ "$v" == <1-> ]] && { print -r -- "$v"; return; }
+  warn "ignoring invalid stale_days value: $v (expected a positive integer)"
+  print -r -- 30
+}
+
+# _status_targets: "name<TAB>project<TAB>repo_path" for every repo in scope.
+_status_targets() {
+  if [[ -n "$ST_REPO" ]]; then
+    local r; r="$(resolve_repo "$ST_REPO")" || exit $?
+    print -r -- "$ST_REPO"$'\t'"${r%%$'\t'*}"$'\t'"${r#*$'\t'}"
+  else
+    all_repos "$WT_PROJECT_OPT"
+  fi
+}
+
+# _status_collect_one <name> <project> <repo_path> <stale_days> <out_prefix>: one repo's
+# records into <out_prefix>.rows, its reason lines into <out_prefix>.notes.
+_status_collect_one() {
+  local name="$1" project="$2" rp="$3" days="$4" out="$5"
+  {
+    if (( ST_FETCH )); then
+      wt_fetch_origin "$rp" >/dev/null 2>&1 || print -u2 -r -- "could not fetch origin; showing local refs"
+    fi
+    (( ST_OFFLINE )) || forge_pr_rows "$rp" > "$out.prs"
+    status_collect_repo "$project" "$name" "$rp" "$days" "$out.prs" > "$out.rows"
+  } 2> "$out.notes"
+}
+
+# _status_collect <notes_file>: records for every repo in scope on stdout, in config order
+# however the jobs finish; "repo: reason" lines appended to <notes_file>.
+_status_collect() {
+  local notes_file="$1" out tmp t name project rp l
+  out="$(_status_targets)" || exit $?
+  local -a targets names; targets=("${(@f)out}")
+  local -A days
+  tmp="$(mktemp -d 2>/dev/null)" || die "could not create a temp directory"
+  local -i i=0 j n=0
+  for t in "${targets[@]}"; do [[ -n "$t" ]] && (( ++n )); done
+  # One forge detection per host, before the jobs fork and inherit WT_FORGE_KINDS.
+  if (( ! ST_OFFLINE )); then
+    for t in "${targets[@]}"; do
+      [[ -n "$t" ]] || continue
+      IFS=$'\t' read -r name project rp <<< "$t"
+      forge_host_path "$(git -C "$rp" remote get-url origin 2>/dev/null)" 2>/dev/null || continue
+      forge_kind "${reply[1]}" >/dev/null
+    done
+  fi
+  for t in "${targets[@]}"; do
+    [[ -n "$t" ]] || continue
+    IFS=$'\t' read -r name project rp <<< "$t"
+    (( ${+days[$project]} )) || days[$project]="$(status_stale_days "$project")"
+    names[++i]="$name"
+    status_pool_wait $WT_STATUS_MAX_JOBS
+    _status_collect_one "$name" "$project" "$rp" "${days[$project]}" "$tmp/$i" &
+    (( ST_PROGRESS && n > WT_STATUS_MAX_JOBS && i % WT_STATUS_MAX_JOBS == 0 )) && ui_progress $i $n "collecting"
+  done
+  wait
+  for (( j = 1; j <= i; j++ )); do
+    [[ -s "$tmp/$j.rows" ]] && cat "$tmp/$j.rows"
+    [[ -s "$tmp/$j.notes" ]] || continue
+    while IFS= read -r l; do
+      [[ -n "$l" ]] && print -r -- "${names[j]}: $l"
+    done < "$tmp/$j.notes" >> "$notes_file"
+  done
+  rm -rf "$tmp"
+}
+
+# _status_sort: records on stdin -> worktrees, branches, orphans, main checkouts, errors;
+# oldest first within each (activity, or last commit for branches; unknown last). Main
+# checkouts are never cleanup candidates, so they go below the rows that are.
+_status_sort() {
+  local line ts
+  local -a f
+  local -i rank
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    f=("${(@ps:\t:)line}")
+    case "${f[1]}" in worktree) rank=1 ;; branch) rank=2 ;; orphan) rank=3 ;; main) rank=4 ;; *) rank=5 ;; esac
+    ts="${f[11]}"; [[ "${f[1]}" == branch ]] && ts="${f[13]}"
+    [[ "$ts" == <-> ]] || ts=9999999999
+    print -r -- "$rank"$'\t'"$ts"$'\t'"$line"
+  done | sort -t $'\t' -k1,1n -k2,2n -s | cut -f3-
+}
+
+_status_filter() {
+  local line
+  local -a f
+  while IFS= read -r line; do
+    f=("${(@ps:\t:)line}")
+    (( ! ST_STALE_FILTER )) || [[ "${f[9]}" == (safe|stale) ]] && print -r -- "$line"
+  done
+  return 0
+}
+
+# _status_records <notes_file>: collected, sorted and filtered records.
+_status_records() {
+  setopt localoptions pipefail
+  _status_collect "$1" | _status_sort | _status_filter
+}
+
+# _status_display <record>: reply=(mark repo name active commit state pr tags).
+_status_display() {
+  local -a f state
+  f=("${(@ps:\t:)1}")
+  local mark=' ' name pr=- active=- commit=-
+  local -i now=$EPOCHSECONDS
+  case "${f[9]}" in safe) mark='✓' ;; stale) mark='●' ;; dirty) mark='!' ;; esac
+  case "${f[1]}" in
+    error)  mark='?' name="${f[26]}" ;;
+    orphan) name="${f[6]}/${f[7]}" ;;
+    *)      name="${f[8]}"; [[ "$name" == - ]] && name="(detached) ${f[5]:t}" ;;
+  esac
+  [[ "${f[1]}" == (main|orphan|error) ]] && state+=("${f[1]}")
+  [[ " ${f[10]} " == *" external "* ]] && state+=(external)
+  (( f[14] )) && [[ "${f[1]}" != main ]] && state+=(merged)
+  (( f[15] )) && state+=(gone)
+  case "${f[16]}" in real) state+=(dirty) ;; unknown) state+=('dirty?') ;; esac
+  (( f[21] )) && state+=(locked)
+  (( f[22] )) && state+=(prunable)
+  [[ "${f[17]}" == <1-> ]] && state+=("↑${f[17]}")
+  [[ "${f[18]}" == <1-> ]] && state+=("↓${f[18]}")
+  [[ "${f[23]}" != - ]] && pr="${f[23]} ${f[24]}"
+  [[ "${f[11]}" == <-> ]] && { status_fmt_age $(( now - f[11] )); active=$REPLY; }
+  [[ "${f[13]}" == <-> ]] && { status_fmt_age $(( now - f[13] )); commit=$REPLY; }
+  reply=("$mark" "${f[3]}" "$name" "$active" "$commit" "${${(j: :)state}:--}" "$pr" "${f[10]/#-/}")
+}
+
+# _status_format <records>: ST_RECS (records), ST_LINES (aligned display lines, colored when
+# ui_init enabled color) and ST_HEADER (matching column header). The TAGS column is what
+# fzf's query (and ctrl-s) matches "stale", "gone" etc. against: fzf only searches what
+# --with-nth displays.
+_status_format() {
+  local line c
+  local -a d w
+  local -i k r
+  w=(1 4 6 6 6 5 2 4)
+  ST_RECS=() ST_LINES=()
+  for line in "${(@f)1}"; do
+    [[ -n "$line" ]] || continue
+    _status_display "$line"
+    ST_RECS+=("$line"); d+=("${reply[@]}")
+    for (( k = 2; k <= 8; k++ )); do (( ${#reply[k]} > w[k] )) && w[k]=${#reply[k]}; done
+  done
+  ST_HEADER="  ${(r:w[2]:):-REPO}  ${(r:w[3]:):-BRANCH}  ${(l:w[4]:):-ACTIVE}  ${(l:w[5]:):-COMMIT}  ${(r:w[6]:):-STATE}  ${(r:w[7]:):-PR}  TAGS"
+  for (( r = 0; r < ${#ST_RECS}; r++ )); do
+    case "${d[r*8+1]}" in
+      '✓') c="$WT_C_OK" ;; '●') c="$WT_C_WARN" ;; '!'|'?') c="$WT_C_ERR" ;; *) c='' ;;
+    esac
+    ST_LINES+=("$c${d[r*8+1]}$WT_C_RESET ${(r:w[2]:)d[r*8+2]}  ${(r:w[3]:)d[r*8+3]}  ${(l:w[4]:)d[r*8+4]}  ${(l:w[5]:)d[r*8+5]}  ${(r:w[6]:)d[r*8+6]}  ${(r:w[7]:)d[r*8+7]}  $WT_C_DIM${d[r*8+8]}$WT_C_RESET")
+  done
+}
+
+_status_print_notes() {
+  local l
+  [[ -s "$1" ]] || return 0
+  while IFS= read -r l; do warn "note: $l"; done < "$1"
+}
+
+_status_render_table() {
+  local records="$1" notes_file="$2"
+  if [[ -z "$records" ]]; then
+    warn "no worktrees or branches found"
+  else
+    _status_format "$records"
+    print -r -- "$ST_HEADER"
+    print -rl -- "${ST_LINES[@]}"
+  fi
+  _status_print_notes "$notes_file"
+}
+
+# _status_jstr <value>: REPLY = JSON string literal, null for "-".
+_status_jstr() {
+  [[ "$1" == - ]] && { REPLY=null; return; }
+  local s="$1" out='' c
+  local -i i
+  s="${s//\\/\\\\}"; s="${s//\"/\\\"}"
+  if [[ "$s" == *[[:cntrl:]]* ]]; then
+    for (( i = 1; i <= ${#s}; i++ )); do
+      c="${s[i]}"
+      if [[ "$c" == [[:cntrl:]] ]]; then printf -v c '\\u%04x' "'$c"; fi
+      out+="$c"
+    done
+    s="$out"
+  fi
+  REPLY="\"$s\""
+}
+
+_status_render_json() {
+  local records="$1" notes_file="$2" line sep='' obj t
+  local -a f
+  local -i now=$EPOCHSECONDS
+  local -a tags
+  print -rn -- '{"notes":['
+  if [[ -s "$notes_file" ]]; then
+    while IFS= read -r line; do
+      _status_jstr "$line"; print -rn -- "$sep$REPLY"; sep=','
+    done < "$notes_file"
+  fi
+  print -rn -- '],"rows":['
+  sep=''
+  for line in "${(@f)records}"; do
+    [[ -n "$line" ]] || continue
+    f=("${(@ps:\t:)line}")
+    obj=''
+    for t in type:1 project:2 repo:3 path:5 kind:6 ticket:7 branch:8 flag:9; do
+      _status_jstr "${f[${t#*:}]}"; obj+="\"${t%%:*}\":$REPLY,"
+    done
+    tags=(); [[ "${f[10]}" != - ]] && tags=(${=f[10]})
+    obj+='"tags":['
+    for t in "${tags[@]}"; do obj+="\"$t\","; done
+    obj="${obj%,}],"
+    [[ "${f[11]}" == <-> ]] && obj+="\"active_age_s\":$(( now - f[11] ))," || obj+='"active_age_s":null,'
+    [[ "${f[13]}" == <-> ]] && obj+="\"commit_age_s\":$(( now - f[13] ))," || obj+='"commit_age_s":null,'
+    [[ "${f[12]}" == <-> ]] && obj+="\"created_at\":${f[12]}," || obj+='"created_at":null,'
+    (( f[14] )) && obj+='"merged":true,' || obj+='"merged":false,'
+    (( f[15] )) && obj+='"gone":true,' || obj+='"gone":false,'
+    _status_jstr "${f[16]}"; obj+="\"dirty\":$REPLY,"
+    for t in ahead:17 behind:18 base_ahead:19 base_behind:20; do
+      [[ "${f[${t#*:}]}" == <-> ]] && obj+="\"${t%%:*}\":${f[${t#*:}]}," || obj+="\"${t%%:*}\":null,"
+    done
+    (( f[21] )) && obj+='"locked":true,' || obj+='"locked":false,'
+    (( f[22] )) && obj+='"prunable":true,' || obj+='"prunable":false,'
+    if [[ "${f[23]}" != - ]]; then
+      _status_jstr "${f[24]}"; obj+="\"pr\":{\"number\":${f[23]#?},\"state\":$REPLY,"
+      _status_jstr "${f[25]}"; obj+="\"url\":$REPLY},"
+    else
+      obj+='"pr":null,'
+    fi
+    _status_jstr "${f[26]}"; obj+="\"note\":$REPLY"
+    print -rn -- "$sep{$obj}"; sep=','
+  done
+  print -r -- ']}'
+}
+
+# Field 27 of each fzf line is the display text; 1-26 are the record, which every binding
+# receives whole through {} so nothing re-parses what is on screen.
+_status_fzf_input() {
+  local -i k
+  for (( k = 1; k <= ${#ST_RECS}; k++ )); do print -r -- "${ST_RECS[k]}"$'\t'"${ST_LINES[k]}"; done
+}
+
+cmd_status() {
+  require_config
+  _status_parse_opts "$@"
+  local notes_file records
+  local -i rc
+  # The wrapper captures stdout to find a cd target, but it still lands on the terminal.
+  (( WT_CAN_CD )) && ui_init force
+  [[ -t 2 ]] && ST_PROGRESS=1
+  notes_file="$(mktemp 2>/dev/null)" || die "could not create a temp file"
+  records="$(_status_records "$notes_file")" || { rc=$?; rm -f "$notes_file"; exit $rc; }
+  if (( ST_JSON )); then _status_render_json "$records" "$notes_file"
+  else _status_render_table "$records" "$notes_file"; fi
+  rm -f "$notes_file"
+}
+
+# __status-rows [status options]: the fzf input for a reload.
+cmd___status-rows() {
+  require_config
+  _status_parse_opts "$@"
+  ui_init force
+  local notes_file records
+  local -i rc
+  notes_file="$(mktemp 2>/dev/null)" || die "could not create a temp file"
+  records="$(_status_records "$notes_file")" || { rc=$?; rm -f "$notes_file"; exit $rc; }
+  rm -f "$notes_file"
+  [[ -n "$records" ]] || return 0
+  _status_format "$records"
+  _status_fzf_input
+}
