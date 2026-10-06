@@ -130,7 +130,7 @@ Looking changes nothing: `status` never prunes, fetches (unless `--fetch`), or d
 
 | mark | meaning |
 | --- | --- |
-| `✓` | safe to remove: merged into the base branch, its PR/MR merged or closed, or its upstream deleted — **and** no uncommitted changes, no unpushed commits, not locked |
+| `✓` | safe to remove: merged into the base branch, its PR/MR merged or closed (while the branch still points at the PR's last commit), or its upstream deleted — **and** no uncommitted changes, no unpushed commits, not locked |
 | `●` | stale: untouched for longer than `stale_days` (default 30) but not provably safe |
 | `!` | removing it would lose work: uncommitted changes (or ones git could not check), commits not on its upstream, or — with no upstream — commits not on the base branch |
 

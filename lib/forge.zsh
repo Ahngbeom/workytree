@@ -1,5 +1,5 @@
 # PR/MR lookup for `status`: one `gh`/`glab` call per repo, normalized to
-# "branch<TAB>ref<TAB>state<TAB>url" rows. Failures print one reason line on stderr and return 1;
+# "branch<TAB>ref<TAB>state<TAB>url<TAB>head_sha" rows. Failures print one reason line on stderr and return 1;
 # callers show the reason and carry on without PR data. A repo without origin yields no rows.
 
 typeset -gi WT_FORGE_TIMEOUT=15
@@ -43,10 +43,10 @@ _forge_detect() {
     github.com) print -r -- github; return ;;
     gitlab.com) print -r -- gitlab; return ;;
   esac
-  if _forge_has gh && gh auth status --hostname "$host" </dev/null >/dev/null 2>&1; then
+  if _forge_has gh && _forge_run gh auth status --hostname "$host"; then
     print -r -- github; return
   fi
-  if _forge_has glab && glab auth status --hostname "$host" </dev/null >/dev/null 2>&1; then
+  if _forge_has glab && _forge_run glab auth status --hostname "$host"; then
     print -r -- gitlab; return
   fi
   print -r -- none
@@ -74,27 +74,28 @@ _forge_run() {
   return $rc
 }
 
-# _forge_latest_per_branch: "branch ref state url updated" rows on stdin -> one
-# "branch ref state url" row per branch, keeping the most recently updated. ISO-8601 UTC
+# _forge_latest_per_branch: "branch ref state url sha updated" rows on stdin -> one
+# "branch ref state url sha" row per branch, keeping the most recently updated. ISO-8601 UTC
 # timestamps from one forge compare correctly as strings.
 _forge_latest_per_branch() {
   local -A best when
   local -a order
-  local b ref st u t
-  while IFS=$'\t' read -r b ref st u t; do
+  local b ref st u sha t
+  while IFS=$'\t' read -r b ref st u sha t; do
     [[ -n "$b" ]] || continue
     if (( ! ${+when[$b]} )); then
       order+=("$b")
     elif [[ ! "$t" > "${when[$b]}" ]]; then
       continue
     fi
-    when[$b]="$t"; best[$b]="$ref"$'\t'"$st"$'\t'"$u"
+    when[$b]="$t"; best[$b]="$ref"$'\t'"$st"$'\t'"$u"$'\t'"$sha"
   done
   for b in "${order[@]}"; do print -r -- "$b"$'\t'"${best[$b]}"; done
 }
 
 # forge_pr_rows <repo_path>: PR/MR rows for origin's repository. state is one of
-# open|draft|merged|closed; ref is "#N" (GitHub) or "!N" (GitLab).
+# open|draft|merged|closed; ref is "#N" (GitHub) or "!N" (GitLab); head_sha is the PR's last
+# commit.
 forge_pr_rows() {
   local repo_path="$1" url host rpath kind out
   local -i rc
@@ -108,13 +109,13 @@ forge_pr_rows() {
     github)
       _forge_has gh || { print -u2 -r -- "gh is not installed; PR lookup skipped"; return 1; }
       _forge_run gh pr list -R "$host/$rpath" --state all --limit 200 \
-        --json headRefName,number,state,isDraft,url,updatedAt \
-        --jq '.[] | [.headRefName, "#\(.number)", (if .isDraft and .state == "OPEN" then "draft" else (.state | ascii_downcase) end), .url, .updatedAt] | @tsv'
+        --json headRefName,number,state,isDraft,url,headRefOid,updatedAt \
+        --jq '.[] | [.headRefName, "#\(.number)", (if .isDraft and .state == "OPEN" then "draft" else (.state | ascii_downcase) end), .url, .headRefOid, .updatedAt] | @tsv'
       rc=$? out="$REPLY" ;;
     gitlab)
       _forge_has glab || { print -u2 -r -- "glab is not installed; MR lookup skipped"; return 1; }
       _forge_run glab mr list -R "$url" --all --per-page 100 -F json \
-        --jq '.[] | [.source_branch, "!\(.iid)", (if .state == "opened" then (if .draft then "draft" else "open" end) elif .state == "locked" then "closed" else .state end), .web_url, .updated_at] | @tsv'
+        --jq '.[] | [.source_branch, "!\(.iid)", (if .state == "opened" then (if .draft then "draft" else "open" end) elif .state == "locked" then "closed" else .state end), .web_url, .sha, .updated_at] | @tsv'
       rc=$? out="$REPLY" ;;
     *)
       print -u2 -r -- "origin host $host is not a GitHub/GitLab host known to gh or glab; PR lookup skipped"

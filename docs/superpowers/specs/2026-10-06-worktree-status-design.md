@@ -105,7 +105,9 @@ squash/rebase 머지는 커밋 SHA가 바뀌어 `--is-ancestor`가 놓친다. PR
 
 `unknown`은 절대 `safe`가 되지 않는다(R24: 판단 불가를 clean으로 취급하지 않는다).
 PR `closed`(머지 없이 닫힘)는 버려진 작업으로 보고 safe 근거에 포함한다. 단 dirty·ahead
-조건은 그대로 적용되므로 로컬에만 있는 작업은 보호된다.
+조건은 그대로 적용되므로 로컬에만 있는 작업은 보호된다. PR의 `merged`/`closed`는 로컬 브랜치
+tip이 그 PR의 head 커밋과 같을 때만 판정 근거로 쓴다. 머지 뒤에 커밋을 더했거나 같은 이름의
+브랜치를 다시 쓴 경우에는 PR 상태를 표시만 하고 판정에서는 무시한다.
 `main`, `orphan`, `error` 행은 플래그를 계산하지 않는다.
 
 ## 5. PR/MR 조회 (`lib/forge.zsh`)
@@ -126,11 +128,11 @@ PR `closed`(머지 없이 닫힘)는 버려진 작업으로 보고 safe 근거�
 
 repo당 네트워크 호출 1회:
 
-- github: `gh pr list --repo <host/owner/name> --state all --limit 200 --json number,state,isDraft,headRefName,url,updatedAt`
+- github: `gh pr list --repo <host/owner/name> --state all --limit 200 --json number,state,isDraft,headRefName,url,headRefOid,updatedAt`
 - gitlab: `glab mr list -R <origin URL> --all --per-page 100 -F json` (`-R`은 Git URL을 그대로 받으므로
   self-hosted 호스트가 보존된다)
 
-출력을 `branch<TAB>번호<TAB>상태<TAB>url` 행으로 정규화한다. 상태는 `open`/`draft`/`merged`/
+출력을 `branch<TAB>번호<TAB>상태<TAB>url<TAB>head_sha` 행으로 정규화한다(GitLab은 `sha`). 상태는 `open`/`draft`/`merged`/
 `closed` 넷 중 하나다. 같은 브랜치에 PR이 여럿이면 `updatedAt`(GitLab은 `updated_at`)이 가장
 최근인 것 하나만 남긴다. JSON 파싱은 `jq`에 의존하지 않는다. 두 CLI 모두 내장 `--jq`로 탭 구분
 출력을 만든다(gh 2.98, glab 1.118에서 실측).

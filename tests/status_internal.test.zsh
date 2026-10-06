@@ -129,4 +129,27 @@ main${t}p${t}r${t}rp${t}/m${t}-${t}-${t}m${t}-${t}-${t}1${t}-${t}-"
   assert_eq "$(_status_sort <<< "$rows" | cut -f1,8 | tr '\t\n' ': ')" "worktree:w1 worktree:w2 branch:b2 branch:b1 orphan:- main:m "
 }
 
+# A merged or closed PR vouches for a branch only while the branch still points at the PR's
+# head commit: commits added after the merge, or a reused branch name, are local-only work.
+test_pr_state_counts_only_at_the_pr_head() {
+  make_repo "$HOME/src/app"
+  typeset -ga WT_PROJECTS=(me)
+  typeset -gA WT_PCFG=(me.repo_root "$HOME/src" me.worktree_root "$HOME/wts") WT_CFG=() WT_RCFG=()
+  git -C "$HOME/src/app" checkout -q -b topic
+  git -C "$HOME/src/app" commit -q --allow-empty -m squash-merged-elsewhere
+  git -C "$HOME/src/app" checkout -q main
+  print -r -- "topic"$'\t'"#5"$'\t'merged$'\t'"https://x/5"$'\t'"$(git -C "$HOME/src/app" rev-parse topic)" > "$HOME/prs"
+  local line; local -a f
+  line="$(status_collect_repo me app "$HOME/src/app" 30 "$HOME/prs" | grep $'^branch\t')"
+  f=("${(@ps:\t:)line}")
+  assert_eq "${f[9]}" safe at-pr-head
+  git -C "$HOME/src/app" checkout -q topic
+  git -C "$HOME/src/app" commit -q --allow-empty -m after-the-merge
+  git -C "$HOME/src/app" checkout -q main
+  line="$(status_collect_repo me app "$HOME/src/app" 30 "$HOME/prs" | grep $'^branch\t')"
+  f=("${(@ps:\t:)line}")
+  assert_eq "${f[9]}" dirty commits-after-the-merge
+  assert_eq "${f[24]}" merged pr-state-still-shown
+}
+
 run_tests

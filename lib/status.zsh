@@ -116,11 +116,16 @@ _status_track() {
 }
 
 # _status_branch_fields <branch>: reply=(commit_ts merged gone ahead behind base_ahead
-# base_behind has_upstream pr_ref pr_state pr_url) for a local branch. Reads
-# status_collect_repo's locals (b_ts b_up b_track b_ab b_merged pr_ref pr_state pr_url base
-# repo_path) through zsh's dynamic scoping; only status_collect_repo calls it.
+# base_behind has_upstream pr_ref pr_state pr_url judged_pr_state) for a local branch.
+# judged_pr_state is what status_flag may rely on: a merged/closed PR counts only while the
+# branch still points at the PR's head, so commits made after it, or a reused branch name,
+# stay local-only work. Reads status_collect_repo's locals (b_ts b_up b_track b_ab b_tip
+# b_merged pr_ref pr_state pr_url pr_sha base repo_path) through zsh's dynamic scoping; only
+# status_collect_repo calls it.
 _status_branch_fields() {
   local br="$1" commit=- merged=0 gone=0 ahead=- behind=- bahead=- bbehind=- has_up=0 counts
+  local judged="${pr_state[$br]:--}"
+  [[ "$judged" == (merged|closed) && "${pr_sha[$br]:-}" != "${b_tip[$br]:-}" ]] && judged=-
   [[ -n "${b_ts[$br]:-}" ]] && commit=${b_ts[$br]}
   if [[ -n "${b_up[$br]:-}" ]]; then
     has_up=1
@@ -136,7 +141,7 @@ _status_branch_fields() {
       && { bbehind=${counts%%[[:space:]]*}; bahead=${counts##*[[:space:]]}; }
   fi
   reply=($commit $merged $gone $ahead $behind $bahead $bbehind $has_up
-         "${pr_ref[$br]:--}" "${pr_state[$br]:--}" "${pr_url[$br]:--}")
+         "${pr_ref[$br]:--}" "${pr_state[$br]:--}" "${pr_url[$br]:--}" "$judged")
 }
 
 _status_emit() { local IFS=$'\t'; print -r -- "$*"; }
@@ -184,10 +189,10 @@ status_collect_repo() {
     return 0
   fi
 
-  local -A pr_ref pr_state pr_url
-  local b r s u
+  local -A pr_ref pr_state pr_url pr_sha
+  local b r s u h
   if [[ -n "$pr_file" && -s "$pr_file" ]]; then
-    while IFS=$'\t' read -r b r s u; do pr_ref[$b]=$r pr_state[$b]=$s pr_url[$b]=$u; done < "$pr_file"
+    while IFS=$'\t' read -r b r s u h; do pr_ref[$b]=$r pr_state[$b]=$s pr_url[$b]=$u pr_sha[$b]=$h; done < "$pr_file"
   fi
 
   local base base_local=- refs fmt
@@ -196,17 +201,17 @@ status_collect_repo() {
   [[ "$base" == refs/heads/* ]] && base_local="${base#refs/heads/}"
 
   # Keep this to two for-each-ref calls: a git call per branch multiplies with branch count.
-  local -A b_ts b_up b_track b_ab b_merged
+  local -A b_ts b_up b_track b_ab b_tip b_merged
   local -a f
-  fmt=$'%(refname:short)\t%(committerdate:unix)\t%(upstream)\t%(upstream:track,nobracket)'
+  fmt=$'%(refname:short)\t%(committerdate:unix)\t%(upstream)\t%(upstream:track,nobracket)\t%(objectname)'
   refs=""
   [[ "$base" != - ]] && refs="$(git -C "$repo_path" for-each-ref --format="$fmt"$'\t'"%(ahead-behind:$base)" refs/heads 2>/dev/null)"
   [[ -n "$refs" ]] || refs="$(git -C "$repo_path" for-each-ref --format="$fmt" refs/heads 2>/dev/null)"
   for line in "${(@f)refs}"; do
     [[ -n "$line" ]] || continue
     f=("${(@ps:\t:)line}")
-    b_ts[${f[1]}]=${f[2]} b_up[${f[1]}]=${f[3]} b_track[${f[1]}]=${f[4]}
-    [[ -n "${f[5]:-}" ]] && b_ab[${f[1]}]=${f[5]}
+    b_ts[${f[1]}]=${f[2]} b_up[${f[1]}]=${f[3]} b_track[${f[1]}]=${f[4]} b_tip[${f[1]}]=${f[5]}
+    [[ -n "${f[6]:-}" ]] && b_ab[${f[1]}]=${f[6]}
   done
   if [[ "$base" != - ]]; then
     for line in ${(f)"$(git -C "$repo_path" for-each-ref --merged="$base" --format='%(refname:short)' refs/heads 2>/dev/null)"}; do
@@ -262,12 +267,12 @@ status_collect_repo() {
         if (( prunable )) || [[ ! -d "$wpath" ]]; then dirt=-
         else dirt="${dirt_of[$wpath]:-unknown}"; fi
         if [[ "$wbranch" != - ]]; then _status_branch_fields "$wbranch"
-        else reply=(- 0 0 - - - - 0 - - -); fi
+        else reply=(- 0 0 - - - - 0 - - - -); fi
         age=-; [[ "$active" != - ]] && age=$(( now - active ))
         if [[ "$type" == main ]]; then
           flag=- tags=(main)
         else
-          status_flag ${reply[2]} ${reply[3]} ${reply[10]} $dirt ${reply[4]} ${reply[8]} ${reply[6]} $locked $age $stale_s
+          status_flag ${reply[2]} ${reply[3]} ${reply[12]} $dirt ${reply[4]} ${reply[8]} ${reply[6]} $locked $age $stale_s
           flag=$REPLY
           [[ "$flag" != - ]] && tags=($flag $tags)
           (( reply[2] )) && tags+=(merged)
@@ -291,7 +296,7 @@ status_collect_repo() {
     [[ "$br" == "$base_local" ]] && continue
     _status_branch_fields "$br"
     age=-; [[ "${reply[1]}" != - ]] && age=$(( now - reply[1] ))
-    status_flag ${reply[2]} ${reply[3]} ${reply[10]} - ${reply[4]} ${reply[8]} ${reply[6]} 0 $age $stale_s
+    status_flag ${reply[2]} ${reply[3]} ${reply[12]} - ${reply[4]} ${reply[8]} ${reply[6]} 0 $age $stale_s
     flag=$REPLY
     tags=(); [[ "$flag" != - ]] && tags=($flag)
     (( reply[2] )) && tags+=(merged)

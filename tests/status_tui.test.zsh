@@ -147,4 +147,28 @@ test_preview_window_probe_is_quiet() {
   [[ "$out" == (right|down),50% ]]; assert_eq "$?" 0 "layout: $out"
 }
 
+# Moving the cursor must not count as activity: the preview's `git status` would otherwise
+# refresh the index, whose mtime is the ACTIVE age.
+test_preview_does_not_rewrite_the_index() {
+  fixture
+  local gd before after line
+  gd="$(git -C "$HOME/wts/app/fix/A" rev-parse --absolute-git-dir)"
+  touch -t 202401010000 "$gd/index"
+  touch "$HOME/wts/app/fix/A/README.md"
+  before="$(zstat +mtime "$gd/index")"
+  line="$(print -r -- "$RECORDS" | grep $'^worktree\t')"
+  cmd___status-preview "$line" >/dev/null
+  after="$(zstat +mtime "$gd/index")"
+  assert_eq "$after" "$before"
+}
+
+# fzf runs every binding through $SHELL -c; the bindings are POSIX sh, so a fish or nushell
+# login shell must not be the one that parses them.
+test_bindings_run_under_posix_sh() {
+  fixture
+  fzf() { [[ "$1" == --version ]] && { print -r -- "0.55.0 (stub)"; return; }; print -r -- "$SHELL" > "$HOME/fzf.shell"; cat >/dev/null; return 130; }
+  SHELL=/usr/local/bin/fish _status_run_fzf "$RECORDS" "$HOME/notes" >/dev/null
+  assert_eq "$(<"$HOME/fzf.shell")" /bin/sh
+}
+
 run_tests

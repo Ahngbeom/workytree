@@ -364,7 +364,8 @@ _status_run_fzf() {
   if [[ -s "$notes_file" ]]; then
     while IFS= read -r l; do header+=$'\n'"note: $l"; done < "$notes_file"
   fi
-  sel="$(_status_fzf_input | fzf --ansi --no-sort --layout=reverse \
+  # fzf runs bindings through $SHELL -c, and they are written for sh, not the user's shell.
+  sel="$(_status_fzf_input | SHELL=/bin/sh fzf --ansi --no-sort --layout=reverse \
     --delimiter=$'\t' --with-nth=27 --header="$header" \
     --preview="$qbin __status-preview {}" --preview-window="$(_status_preview_window)" \
     --bind="ctrl-d:execute($qbin __status-action remove {})+reload($rows_cmd)" \
@@ -416,7 +417,7 @@ cmd___status-preview() {
   case "$type" in
     main|worktree)
       [[ -d "$p" ]] || return 0
-      local changes; changes="$(git -C "$p" status --short 2>&1)"
+      local changes; changes="$(GIT_OPTIONAL_LOCKS=0 git -C "$p" status --short 2>&1)"
       print; print -r -- "changes:"
       if [[ -z "$changes" ]]; then print -r -- "  (none)"
       else
