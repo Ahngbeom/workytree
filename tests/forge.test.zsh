@@ -83,10 +83,14 @@ test_repo_without_origin_yields_nothing_silently() {
   assert_eq "$out" ""
 }
 
+# PATH holds only git: a system dir such as /usr/bin can itself carry gh (GitHub's Ubuntu
+# runners install it there).
 test_missing_cli_is_reported_not_run() {
   repo_with_origin https://github.com/o/r.git
   unstub
-  local err; err="$(path=(/usr/bin /bin); forge_pr_rows "$HOME/r" 2>&1 >/dev/null)"
+  mkdir -p "$HOME/only-git"
+  ln -s "$(command -v git)" "$HOME/only-git/git"
+  local err; err="$(path=("$HOME/only-git"); forge_pr_rows "$HOME/r" 2>&1 >/dev/null)"
   assert_eq "$err" "gh is not installed; PR lookup skipped"
 }
 
