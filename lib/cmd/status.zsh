@@ -282,13 +282,17 @@ cmd_status() {
   require_config
   _status_parse_opts "$@"
   local notes_file records
-  local -i rc
+  local -i interactive=0 rc
+  if (( ! ST_JSON && ! ST_PLAIN )) && [[ -t 0 ]] && { [[ -t 1 ]] || (( WT_CAN_CD )); }; then
+    _status_fzf_ok && interactive=1
+  fi
   # The wrapper captures stdout to find a cd target, but it still lands on the terminal.
-  (( WT_CAN_CD )) && ui_init force
+  (( interactive || WT_CAN_CD )) && ui_init force
   [[ -t 2 ]] && ST_PROGRESS=1
   notes_file="$(mktemp 2>/dev/null)" || die "could not create a temp file"
   records="$(_status_records "$notes_file")" || { rc=$?; rm -f "$notes_file"; exit $rc; }
   if (( ST_JSON )); then _status_render_json "$records" "$notes_file"
+  elif (( interactive )); then _status_run_fzf "$records" "$notes_file"
   else _status_render_table "$records" "$notes_file"; fi
   rm -f "$notes_file"
 }
@@ -306,4 +310,166 @@ cmd___status-rows() {
   [[ -n "$records" ]] || return 0
   _status_format "$records"
   _status_fzf_input
+}
+
+# _status_fzf_ok: fzf is installed and new enough for the bindings below.
+_status_fzf_ok() {
+  (( $+functions[fzf] || $+commands[fzf] )) || return 1
+  local v; v="$(fzf --version 2>/dev/null)"; v="${v%% *}"
+  local -a have want
+  have=("${(@s:.:)v}") want=("${(@s:.:)WT_STATUS_FZF_MIN}")
+  [[ "${have[1]:-}" == <-> && "${have[2]:-}" == <-> ]] || { warn "could not read fzf's version; showing a table instead"; return 1; }
+  (( have[1] > want[1] || (have[1] == want[1] && have[2] >= want[2]) )) && return 0
+  warn "fzf $v is older than $WT_STATUS_FZF_MIN; showing a table instead"
+  return 1
+}
+
+_status_preview_window() {
+  local size; size="$({ stty size < /dev/tty; } 2>/dev/null)"
+  (( ${${size##* }:-0} >= 120 )) && print -r -- 'right,50%' || print -r -- 'down,50%'
+}
+
+# _status_reload_args: reply = the options that reproduce this listing in __status-rows.
+_status_reload_args() {
+  reply=()
+  [[ -n "$WT_PROJECT_OPT" ]] && reply+=(--project "$WT_PROJECT_OPT")
+  (( WT_COLOR )) || reply+=(--no-color)
+  [[ -n "$ST_REPO" ]] && reply+=("$ST_REPO")
+  if (( ST_STALE_FILTER )); then
+    reply+=(--stale)
+    (( ST_STALE_DAYS >= 0 )) && reply+=("$ST_STALE_DAYS")
+  fi
+  (( ST_OFFLINE )) && reply+=(--offline)
+  return 0
+}
+
+_status_run_fzf() {
+  local records="$1" notes_file="$2" bin="$WORKYTREE_HOME/bin/workytree" line sel here_repo='' l
+  local -a f args
+  local -i best=0
+  # The repo whose worktree this shell stands in: where the wrapper should send the shell if
+  # ctrl-d removes that worktree out from under it.
+  for line in "${(@f)records}"; do
+    f=("${(@ps:\t:)line}")
+    [[ "${f[1]}" == (main|worktree) && "${PWD:A}/" == "${f[5]:A}/"* ]] || continue
+    (( ${#f[5]} > best )) && { best=${#f[5]}; here_repo="${f[4]}"; }
+  done
+  _status_reload_args; args=("${reply[@]}")
+  local qbin="${(q)bin}"
+  local rows_cmd="$qbin __status-rows${args:+ ${(j: :)${(q)args[@]}}}"
+  local fetch_cmd="$rows_cmd"; (( ST_OFFLINE )) || fetch_cmd+=" --fetch"
+  local header="enter: cd · ctrl-d: remove · ctrl-o: open PR · ctrl-r: refresh with fetch · ctrl-s: stale only"
+  _status_format "$records"
+  header+=$'\n'"$ST_HEADER"
+  if [[ -s "$notes_file" ]]; then
+    while IFS= read -r l; do header+=$'\n'"note: $l"; done < "$notes_file"
+  fi
+  sel="$(_status_fzf_input | fzf --ansi --no-sort --layout=reverse \
+    --delimiter=$'\t' --with-nth=27 --header="$header" \
+    --preview="$qbin __status-preview {}" --preview-window="$(_status_preview_window)" \
+    --bind="ctrl-d:execute($qbin __status-action remove {})+reload($rows_cmd)" \
+    --bind="ctrl-o:execute-silent($qbin __status-action open {})" \
+    --bind="ctrl-r:reload($fetch_cmd)" \
+    --bind="ctrl-s:transform-query(if [ {q} = stale ]; then echo; else echo stale; fi)")"
+  if [[ -n "$sel" ]]; then
+    f=("${(@ps:\t:)sel}")
+    if [[ "${f[1]}" == (main|worktree) && -d "${f[5]}" ]]; then print -r -- "${f[5]}"; return 0; fi
+  fi
+  [[ -n "$here_repo" && ! -d "$PWD" ]] && print -r -- "$here_repo"
+  return 0
+}
+
+_status_kb() {
+  local -i kb=$1
+  if (( kb >= 1048576 )); then print -r -- "$(( kb / 1048576 )) GB"
+  elif (( kb >= 1024 )); then print -r -- "$(( kb / 1024 )) MB"
+  else print -r -- "$kb KB"; fi
+}
+
+_status_when() {
+  [[ "$1" == <-> ]] || { print -r -- unknown; return; }
+  status_fmt_age $(( EPOCHSECONDS - $1 ))
+  print -r -- "$(strftime '%Y-%m-%d %H:%M' $1) ($REPLY ago)"
+}
+
+# __status-preview <fzf line>: details for the highlighted row.
+cmd___status-preview() {
+  local -a f; f=("${(@ps:\t:)${1:-}}")
+  (( ${#f} >= 26 )) || return 0
+  local type="${f[1]}" repo_path="${f[4]}" p="${f[5]}" br="${f[8]}" kb created
+  print -r -- "$type · ${f[3]}${f[10]:+ · ${f[10]}}"
+  [[ "$p" != - ]] && print -r -- "path      $p"
+  if [[ "$type" == error ]]; then print -r -- "error     ${f[26]}"; return 0; fi
+  [[ "$type" == (main|worktree) ]] && print -r -- "created   $(_status_when "${f[12]}")"
+  [[ "$type" != branch ]] && print -r -- "active    $(_status_when "${f[11]}")"
+  if [[ "$br" != - ]]; then
+    created="$(git -C "$repo_path" reflog show --date=unix --format=%gd "refs/heads/$br" -- 2>/dev/null | tail -1)"
+    created="${${created##*\{}%\}}"
+    print -r -- "branch    $br"
+    print -r -- "  created     $(_status_when "$created")"
+    print -r -- "  last commit $(_status_when "${f[13]}")"
+    [[ "${f[17]}" == <-> ]] && print -r -- "  upstream    ↑${f[17]} ↓${f[18]}"
+    (( f[15] )) && print -r -- "  upstream    gone (deleted on the remote)"
+    [[ "${f[19]}" == <-> ]] && print -r -- "  base        ↑${f[19]} ↓${f[20]}"
+  fi
+  [[ "${f[23]}" != - ]] && print -r -- "PR        ${f[23]} ${f[24]}  ${f[25]}"
+  case "$type" in
+    main|worktree)
+      [[ -d "$p" ]] || return 0
+      local changes; changes="$(git -C "$p" status --short 2>&1)"
+      print; print -r -- "changes:"
+      if [[ -z "$changes" ]]; then print -r -- "  (none)"
+      else
+        local -a cl; cl=("${(@f)changes}")
+        print -rl -- "${(@)cl[1,15]/#/  }"
+        (( ${#cl} > 15 )) && print -r -- "  … $(( ${#cl} - 15 )) more"
+      fi
+      print; print -r -- "recent commits:"
+      git -C "$p" log --oneline -5 2>/dev/null | sed 's/^/  /' ;;
+    branch)
+      print; print -r -- "recent commits:"
+      git -C "$repo_path" log --oneline -5 "refs/heads/$br" -- 2>/dev/null | sed 's/^/  /'
+      print; print -r -- "delete it yourself: git -C ${(q)repo_path} branch -d ${(q)br}" ;;
+    orphan)
+      print
+      if dir_is_cruft_only "$p"; then print -r -- "holds only IDE/OS files; \`wt prune ${f[3]}\` removes it"
+      else print -r -- "holds real files; inspect before deleting"; fi ;;
+  esac
+  if [[ "$p" != - && -d "$p" ]]; then
+    kb="$(du -sk -- "$p" 2>/dev/null)"; kb="${kb%%[[:space:]]*}"
+    [[ "$kb" == <-> ]] && { print; print -r -- "size      $(_status_kb $kb)"; }
+  fi
+  return 0
+}
+
+_status_pause() {
+  { : < /dev/tty; } 2>/dev/null || return 0
+  print -nu2 -- "press any key to return to the list…"
+  read -rsk1 < /dev/tty
+  print -u2
+}
+
+# __status-action remove|open <fzf line>: what ctrl-d / ctrl-o do to the highlighted row.
+cmd___status-action() {
+  local action="${1:-}"
+  local -a f; f=("${(@ps:\t:)${2:-}}")
+  (( ${#f} >= 26 )) || usage_error "usage: workytree __status-action remove|open <record>"
+  case "$action" in
+    remove)
+      if [[ "${f[1]}" == worktree && "${f[6]}" != - ]]; then
+        ( WT_PROJECT_OPT="${f[2]}"; cmd_remove "${f[3]}" "${f[6]}" "${f[7]}" )
+      else
+        warn "only worktrees under worktree_root can be removed from here"
+        [[ "${f[1]}" == branch ]] && hint "delete the branch yourself: git -C ${(q)f[4]} branch -d ${(q)f[8]}"
+        [[ "${f[1]}" == orphan ]] && hint "wt prune ${f[3]} removes orphan directories that hold only IDE/OS files"
+      fi
+      _status_pause ;;
+    open)
+      [[ "${f[25]}" != - ]] || return 0
+      if (( $+commands[open] )); then open "${f[25]}"
+      elif (( $+commands[xdg-open] )); then xdg-open "${f[25]}" >/dev/null 2>&1
+      fi ;;
+    *) usage_error "usage: workytree __status-action remove|open <record>" ;;
+  esac
+  return 0
 }
