@@ -11,7 +11,7 @@ cmd___complete() {
   local what="${1:-}"; (( $# )) && shift
   case "$what" in
     commands)
-      print -l init create remove prune list repos path cd project repo config help ;;
+      print -l init create remove prune list status repos path cd project repo config help ;;
     projects)
       (( WT_CONFIG_EXISTS )) && print -l -- "${WT_PROJECTS[@]}" ;;
     repos)

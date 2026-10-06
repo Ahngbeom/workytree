@@ -412,4 +412,31 @@ test_configured_session_arms_the_channel_without_the_flag() {
   assert_contains "$out" "AGENT-RAN" "ai_session = always arms it with no flag"
 }
 
+# status uses the same "last stdout line is a directory -> cd" contract as create/cd/remove.
+# The real CLI only prints a path after an fzf selection, so a stand-in binary plays that part
+# and reports whether the wrapper claimed the cd capability -- which it must not when its own
+# stdout is a pipe, as it is here.
+test_status_output_last_line_is_a_cd_target() {
+  fixture
+  mkdir -p "$HOME/fakebin" "$HOME/target"
+  cat > "$HOME/fakebin/wt-status" <<EOF
+#!/bin/sh
+echo "capable=[\${WORKYTREE_CD_CAPABLE:-}]"
+echo "$HOME/target"
+EOF
+  chmod +x "$HOME/fakebin/wt-status"
+  local out
+  out="$(zsh_i "WORKYTREE_BIN='$HOME/fakebin/wt-status'; wt status; print -r -- \"pwd=\$PWD\"")"
+  assert_contains "$out" "capable=[]"
+  assert_contains "$out" "pwd=$HOME/target"
+}
+
+test_status_table_output_is_printed_without_cd() {
+  fixture
+  local out
+  out="$(zsh_i "cd '$HOME'; wt status --offline --plain; print -r -- \"pwd=\$PWD\"")"
+  assert_contains "$out" "REPO"
+  assert_contains "$out" "pwd=$HOME"
+}
+
 run_tests

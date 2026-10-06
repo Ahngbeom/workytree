@@ -63,6 +63,9 @@ _workytree() {
       # (lib/cmd/create.zsh), so offer it at every position rather than gating on $idx.
       [[ $sub == create ]] && _values -w flag --ai
       ;;
+    status)
+      (( idx == 1 )) && _workytree_values repo repos
+      _values -w flag --fetch --offline --stale --json --plain ;;
     project) (( idx == 1 )) && _values sub list add remove default || _workytree_values project projects ;;
     repo)    (( idx == 1 )) && _values sub list add remove || _files -/ ;;
     config)  (( idx == 1 )) && _values sub path get set edit ;;

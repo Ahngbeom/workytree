@@ -73,6 +73,7 @@ whatever your deepest repo needs) or register the deep repo directly with `worky
     wt create server fix PROJ-1 origin/develop -y
     wt cd server fix PROJ-1
     wt list [repo] · wt repos · wt path [repo [kind [ticket]]]
+    wt status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain]
     wt remove                       # interactive: pick a worktree → branches → destination → confirm
     wt remove server fix PROJ-1      # interactive: branches → destination → confirm
     wt remove server fix PROJ-1 [--force] [-b|-B] [-r] [--to <dir>] -y
@@ -116,6 +117,49 @@ asked: the flags decide (`-b`/`-B` local branch, `-r` remote branch, `--to <dir>
 destination). Removing the worktree you are standing in moves you to the source repo unless
 `--to` says otherwise. A branch delete that fails is reported but does not change the exit
 code, because the worktree is already gone by then.
+
+## Status
+
+`wt status` lists every worktree, every local branch without a worktree, and every
+directory under `worktree_root` that git no longer knows about, across the repos in scope
+(`--project`, or one `[repo]`). With `fzf` 0.38+ on your `PATH` and a terminal on both ends it
+opens an fzf list with a details pane; otherwise — `--plain`, no or older `fzf`, or output
+piped somewhere — it prints a table. `--json` prints the same data for scripts.
+
+Looking changes nothing: `status` never prunes, fetches (unless `--fetch`), or deletes.
+
+| mark | meaning |
+| --- | --- |
+| `✓` | safe to remove: merged into the base branch, its PR/MR merged or closed, or its upstream deleted — **and** no uncommitted changes, no unpushed commits, not locked |
+| `●` | stale: untouched for longer than `stale_days` (default 30) but not provably safe |
+| `!` | removing it would lose work: uncommitted changes (or ones git could not check), commits not on its upstream, or — with no upstream — commits not on the base branch |
+
+`ACTIVE` is the last activity in the worktree (its index/HEAD), `COMMIT` the branch's last
+commit; creation times are in the details pane. The base branch is `origin/HEAD`, else
+`origin/main` or `origin/master`, else the main checkout's branch. A branch with no commits of
+its own is "merged" — a worktree you just created and have not committed to shows `✓`.
+
+| key | action |
+| --- | --- |
+| `enter` | cd into the worktree (shell integration only; `bin/workytree` prints the path) |
+| `ctrl-d` | `wt remove` the worktree, with its usual questions, then refresh |
+| `ctrl-o` | open the PR/MR in the browser |
+| `ctrl-r` | `git fetch` every repo, then refresh |
+| `ctrl-s` | show only `stale`/`safe` rows (again to show all) |
+
+PR/MR data comes from `gh` (GitHub) or `glab` (GitLab, including self-hosted hosts `glab` is
+logged in to), one call per repo; without them, or with `--offline`, the PR column is empty
+and everything else still works. A squash or rebase merge leaves no ancestry for git to find,
+so such a branch only shows as merged while its PR/MR can be looked up.
+
+`✓` relies on `git status`, so it shares `remove`'s blind spot below: gitignored files such as
+`.env` do not count as work.
+
+    wt config set stale_days 14                  # every project
+    wt config set project.work.stale_days 60     # one project
+
+Scripts should call `bin/workytree status --json` directly: through the `wt` function the
+output is captured first to look for a cd target.
 
 ## AI sessions (opt-in)
 

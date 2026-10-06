@@ -57,7 +57,7 @@ workytree() {
   local sub=""
   (( sub_idx > 0 )) && sub="${@[$sub_idx]}"
   case "$sub" in
-    create|cd|remove) ;;
+    create|cd|remove|status) ;;
     *) "$WORKYTREE_BIN" "$@"; return $? ;;
   esac
   local -a call_args; call_args=("$@")
@@ -117,6 +117,10 @@ workytree() {
   if [[ -n "$runfile" ]]; then
     output="$(WORKYTREE_AI_RUNFILE="$runfile" "$WORKYTREE_BIN" "${call_args[@]}")"
   elif [[ "$sub" == remove && -o interactive ]]; then
+    output="$(WORKYTREE_CD_CAPABLE=1 "$WORKYTREE_BIN" "${call_args[@]}")"
+  # status opens fzf only when its output reaches a terminal; `wt status | grep` must get the
+  # table, so the capability is not claimed when this function's own stdout is a pipe.
+  elif [[ "$sub" == status && -o interactive && -t 1 ]]; then
     output="$(WORKYTREE_CD_CAPABLE=1 "$WORKYTREE_BIN" "${call_args[@]}")"
   else
     output="$("$WORKYTREE_BIN" "${call_args[@]}")"
