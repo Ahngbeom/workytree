@@ -35,7 +35,10 @@ Once published, running it against an already-installed copy at the default loca
 re-cloning.
 
 Tested with zsh 5.9 and git 2.50.1. `fzf` is used for the `create` picker screens when it is
-on your `PATH`; without it, `create` falls back to a numbered-menu prompt.
+on your `PATH`; without it, pickers fall back to a built-in menu. Every interactive prompt —
+pickers and yes/no confirmations in `create`, `remove`, `init` — is answered with the arrow
+keys (or `j`/`k`) and Enter; Enter alone takes the highlighted default. Typing `y`/`n` or an
+item's number still answers at once, and `q`, Esc or Ctrl-C cancels.
 
 ## Concepts
 
@@ -226,7 +229,7 @@ never a failed `create`.
 | 1 | general error — a bad argument value (unknown repo/project, unmerged branch without `-B`, ...), or `init` refusing because a valid config already exists |
 | 2 | usage error — malformed command line: wrong number of arguments, an unknown flag |
 | 3 | a problem with the config **file's state** — not merely "no config". Covers: no config file; a config that fails to parse (duplicate section/key, an unparseable line); a config file that is unreadable or not a regular file; a `[project]` missing `repo_root` or `worktree_root`; a `repo_root`/`worktree_root` that is relative, `/`, or a strict ancestor of `$HOME`; and a config directory that isn't writable |
-| 130 | interactive prompt was cancelled (`q` or EOF) |
+| 130 | interactive prompt was cancelled (`q`, Esc, Ctrl-C or EOF) |
 
 Two rough edges are known and deliberately not smoothed over here: `resolve_repo`'s "unsafe
 repo name" refusal and `prune`'s aggregate multi-repo failure both exit 1, where 3 would be
