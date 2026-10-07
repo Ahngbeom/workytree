@@ -2,330 +2,354 @@
 
 [![ci](https://github.com/Ahngbeom/workytree/actions/workflows/ci.yml/badge.svg)](https://github.com/Ahngbeom/workytree/actions/workflows/ci.yml)
 
-Git worktree manager with project-scoped roots and an interactive `create`.
-`workytree` is the command; `wt` is installed as a short alias for interactive shell use
-(opt out with `alias_wt = false`, or `WORKYTREE_ALIAS=0` for the current shell).
+Git worktree를 프로젝트 단위로 만들고, 상태를 한눈에 보고, 작업을 잃지 않게 지우는 zsh 도구다.
+명령은 `workytree`이고, 대화형 셸에서는 짧은 별칭 `wt`를 쓴다.
 
-## Install (zsh)
+```mermaid
+flowchart LR
+    init["wt init<br/>프로젝트 등록"] --> create["wt create<br/>워크트리 + 브랜치 생성"]
+    create -->|선택| ai["AI 세션<br/>새 워크트리에서 에이전트 실행"]
+    create --> work["작업"]
+    ai --> work
+    work --> status["wt status<br/>상태·PR·정리 대상 확인"]
+    status -->|ctrl-d| remove["wt remove<br/>브랜치까지 정리"]
+    status -->|enter| work
+    remove --> prune["wt prune<br/>남은 디렉터리 정리"]
+```
 
-Clone this repository yourself, then run the installer from the checkout:
+## 기능
 
-    git clone <this-repository-url> workytree
-    cd workytree
-    sh install.sh
-    exec zsh
-    workytree init
+| 기능 | 명령 | 하는 일 |
+|---|---|---|
+| 워크트리 만들기 | `wt create` | repo → kind → ticket → base를 묻고 `<kind>/<ticket>` 브랜치와 워크트리를 만든 뒤 그 디렉터리로 이동 |
+| 상태 보기 | `wt status` | 모든 워크트리·브랜치의 최근 활동, PR/MR, 지워도 되는지 여부를 fzf 목록으로 표시 |
+| 워크트리 지우기 | `wt remove` | 변경 사항·로컬 브랜치·원격 브랜치를 하나씩 확인하고 지운 뒤 원하는 곳으로 이동 |
+| 정리 | `wt prune` | git이 잊은 워크트리 기록과 내용 없는 고아 디렉터리 정리 |
+| AI 세션 | `wt create --ai` | 새 워크트리에서 Claude Code 같은 코딩 에이전트를 바로 실행 (기본 꺼짐) |
+| 이동·조회 | `wt cd`, `wt path`, `wt list`, `wt repos` | 워크트리로 이동하거나 경로·목록 출력 |
+| 설정 관리 | `wt project`, `wt repo`, `wt config` | 프로젝트·repo 등록, 설정 읽기·쓰기 |
 
-`sh install.sh`, run from inside a checkout (as above), detects that it's running from one
-(`bin/workytree`, `lib/`, and `shell/` sitting next to `install.sh`) and installs straight from
-it — no network access and no `WORKYTREE_INSTALL_DIR` needed. It symlinks
-`~/.local/bin/workytree` onto the checkout and adds one `source` line to `~/.zshrc` — backing
-the file up first (`.zshrc.bak-<timestamp>`) and never adding the line twice. It is safe to
-re-run.
+모든 대화형 질문은 방향키와 Enter로 답한다. 자세한 조작은 [대화형 프롬프트](#대화형-프롬프트)에 있다.
 
-The one-liner below clones the repository and runs the installer directly — the same clone
-path this repository's `install-smoke` CI job exercises against every commit:
+## 빠른 시작
 
-    curl -fsSL https://raw.githubusercontent.com/Ahngbeom/workytree/main/install.sh | sh
-    exec zsh
-    workytree init
+1. 설치한다.
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/Ahngbeom/workytree/main/install.sh | sh
+   exec zsh
+   ```
+2. 프로젝트를 등록한다. clone이 모여 있는 디렉터리(`repo_root`)와 워크트리를 둘 디렉터리(`worktree_root`)를 묻는다.
+   ```sh
+   workytree init
+   ```
+3. 워크트리를 만든다.
+   ```sh
+   wt create
+   ```
 
-Once published, running it against an already-installed copy at the default location
-(`~/.local/share/workytree`) updates that copy in place (`git pull --ff-only`) rather than
-re-cloning.
+## 설치
 
-Tested with zsh 5.9 and git 2.50.1. `fzf` is used for the `create` picker screens when it is
-on your `PATH`; without it, pickers fall back to a built-in menu. Every interactive prompt —
-pickers and yes/no confirmations in `create`, `remove`, `init` — is answered with the arrow
-keys (or `j`/`k`) and Enter; Enter alone takes the highlighted default. Typing `y`/`n` or an
-item's number still answers at once, and `q`, Esc or Ctrl-C cancels.
+저장소를 직접 clone한 뒤 설치 스크립트를 실행해도 된다.
 
-## Concepts
+```sh
+git clone https://github.com/Ahngbeom/workytree.git workytree
+cd workytree
+sh install.sh
+exec zsh
+workytree init
+```
 
-A **project** pairs a `repo_root` (a directory scanned recursively, up to `scan_depth` levels
-deep, default 3) with a `worktree_root`. Worktrees are created at
-`<worktree_root>/<repo>/<kind>/<ticket>` on branch `<kind>/<ticket>`.
+| 항목 | 동작 |
+|---|---|
+| 설치 원본 | checkout 안에서 실행하면(`bin/workytree`, `lib/`, `shell/`이 옆에 있으면) 네트워크 없이 그 checkout을 그대로 씀 |
+| 실행 파일 | `~/.local/bin/workytree`를 checkout으로 심볼릭 링크 |
+| `~/.zshrc` | `source` 한 줄 추가. 먼저 `.zshrc.bak-<timestamp>`로 백업하고, 같은 줄을 두 번 넣지 않음 |
+| 재실행 | 안전함. `curl` 설치본은 기본 위치(`~/.local/share/workytree`)에서 `git pull --ff-only`로 갱신 |
+| 검증 환경 | zsh 5.9, git 2.50.1. `curl` 설치 경로는 CI의 `install-smoke` 작업이 커밋마다 검증 |
 
-**`scan_depth` has a hard, silent cutoff.** A repo nested deeper than `scan_depth` levels
-below `repo_root` is not found by `repos`, `path`, or `create` — and nothing tells you it was
-skipped; it simply never appears, the same as if it didn't exist. The default (3) means a repo
-at `repo_root/a/b/c` is found but one at `repo_root/a/b/c/d` is not. If your own layout nests
-repos deeper than that, raise `scan_depth` for that project explicitly (`scan_depth = 5`, or
-whatever your deepest repo needs) or register the deep repo directly with `workytree repo add`.
+`fzf`가 `PATH`에 있으면 선택 화면에 fzf를 쓰고, 없으면 내장 메뉴를 쓴다. `wt status`의 목록 화면은 fzf 0.38 이상이 필요하다.
 
-    ~/.config/workytree/config
-    ─────────────────────────
-    default_project = work
-    alias_wt = true
-    kinds = feature,fix,chore,hotfix,refactor
+`wt` 별칭이 필요 없으면 설정에 `alias_wt = false`를 쓰거나, 현재 셸에서만 `WORKYTREE_ALIAS=0`을 설정한다.
 
-    [project work]
-    repo_root     = ~/work/products
-    worktree_root = ~/work/worktrees
-    scan_depth    = 3
+## 개념
 
-    [repo legacy]            # optional explicit registration, e.g. a clone outside repo_root
-    path    = ~/elsewhere/legacy-api
-    project = work
+**프로젝트**는 `repo_root`와 `worktree_root`의 짝이다. `repo_root` 아래를 `scan_depth`(기본 3) 단계까지 훑어 repo를 찾는다. 워크트리는 `<worktree_root>/<repo>/<kind>/<ticket>`에 `<kind>/<ticket>` 브랜치로 만든다.
 
-## Usage
+```ini
+# ~/.config/workytree/config
+default_project = work
+alias_wt = true
+kinds = feature,fix,chore,hotfix,refactor
 
-    wt create                       # interactive: project → repo → kind → ticket → base → confirm
-    wt create fix PROJ-1             # inside a repo: confirm repo, then create
-    wt create server fix PROJ-1      # explicit repo
-    wt create server fix PROJ-1 origin/develop -y
-    wt cd server fix PROJ-1
-    wt list [repo] · wt repos · wt path [repo [kind [ticket]]]
-    wt status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain]
-    wt remove                       # interactive: pick a worktree → branches → destination → confirm
-    wt remove server fix PROJ-1      # interactive: branches → destination → confirm
-    wt remove server fix PROJ-1 [--force] [-b|-B] [-r] [--to <dir>] -y
-    wt prune [repo]
-    wt project add <name> <repo_root> <worktree_root>
-    wt repo add <path> [--name n] [--project p]
-    wt config get|set|edit|path
-    wt create --ai fix PROJ-1       # create, cd, then open an AI session there
+[project work]
+repo_root     = ~/work/products
+worktree_root = ~/work/worktrees
+scan_depth    = 3
 
-Repo names are resolved in order: registered `[repo]` alias → scan of every project's
-`repo_root` → current directory. Ambiguous names across projects need `--project <name>`; two
-repos sharing a basename *within the same project* can't be disambiguated with `--project` (they're
-already in it) — register the one you want under a distinct alias with `workytree repo add
-<path> --name <alias>` instead.
-`--project`, `--yes`/`-y`, and `--no-color` are global options and are accepted in any
-position on the command line.
+[repo legacy]            # 선택: repo_root 밖의 clone을 직접 등록
+path    = ~/elsewhere/legacy-api
+project = work
+```
 
-## Removing a worktree
+> **주의**: `scan_depth`보다 깊은 repo는 아무 경고 없이 빠진다. 기본값 3이면 `repo_root/a/b/c`의 repo는 찾지만 `repo_root/a/b/c/d`는 찾지 못한다. 더 깊게 두었다면 그 프로젝트의 `scan_depth`를 올리거나 `workytree repo add`로 직접 등록한다.
 
-Run from a terminal, `remove` asks before it touches anything beyond the worktree itself:
+repo 이름은 다음 순서로 찾는다.
 
-0. which worktree, when `repo`, `kind` or `ticket` is left out — the ones given narrow the
-   list, and the worktree you are standing in is offered first
-1. whether to discard uncommitted changes, if there are any (otherwise it stops and suggests
-   `git stash -u` or `--force`)
-2. whether to delete the local branch — defaults to yes when it is merged; an unmerged branch
-   needs a second, explicit yes to force-delete
-3. whether to delete the remote branch, when one is known (its upstream, or a same-named
-   `refs/remotes/<remote>/` ref, checked right after a `git fetch --prune origin`) — defaults
-   to no, since it pushes a delete
-4. where to go afterwards — only through the shell integration, which is what can `cd`
-5. a plan summary and `Proceed?`
+1. 등록된 `[repo]` 별칭
+2. 모든 프로젝트의 `repo_root` 스캔
+3. 현재 디렉터리
 
-`create` fetches `origin` the same way before it branches, so an auto-detected base such as
-`origin/main` is current. Both skip the fetch when there is no `origin`, and carry on with
-the local refs (after a warning) when it fails.
+여러 프로젝트에 같은 이름이 있으면 `--project <name>`으로 고른다. **같은 프로젝트 안**에서 이름이 겹치면 `--project`로는 가릴 수 없으므로 `workytree repo add <path> --name <alias>`로 다른 별칭을 붙인다.
 
-Each `remove` step then shows a progress bar, failures come with `hint:` lines, and a summary lists
-what was removed, deleted, kept, or failed. With `-y`, or without a terminal, nothing is
-asked: the flags decide (`-b`/`-B` local branch, `-r` remote branch, `--to <dir>`
-destination). Removing the worktree you are standing in moves you to the source repo unless
-`--to` says otherwise. A branch delete that fails is reported but does not change the exit
-code, because the worktree is already gone by then.
+## 사용법
 
-## Status
+```sh
+wt create                          # 대화형: project → repo → kind → ticket → base → 확인
+wt create fix PROJ-1               # repo 안에서: repo 확인 후 생성
+wt create server fix PROJ-1        # repo 지정
+wt create server fix PROJ-1 origin/develop -y
+wt create --ai fix PROJ-1          # 생성하고 이동한 뒤 AI 세션 실행
+wt cd server fix PROJ-1
+wt list [repo] · wt repos · wt path [repo [kind [ticket]]]
+wt status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain]
+wt remove                          # 대화형: 워크트리 선택 → 브랜치 → 이동할 곳 → 확인
+wt remove server fix PROJ-1        # 대화형: 브랜치 → 이동할 곳 → 확인
+wt remove server fix PROJ-1 [--force] [-b|-B] [-r] [--to <dir>] -y
+wt prune [repo]
+wt project add <name> <repo_root> <worktree_root>
+wt repo add <path> [--name n] [--project p]
+wt config get|set|edit|path
+```
 
-`wt status` lists every worktree, every local branch without a worktree, and every
-directory under `worktree_root` that git no longer knows about, across the repos in scope
-(`--project`, or one `[repo]`). With `fzf` 0.38+ on your `PATH` and a terminal on both ends it
-opens an fzf list with a details pane; otherwise — `--plain`, no or older `fzf`, or output
-piped somewhere — it prints a table. `--json` prints the same data for scripts.
+`--project`, `--yes`/`-y`, `--no-color`는 전역 옵션이라 명령줄 어디에 써도 된다.
 
-Looking changes nothing: `status` never prunes, fetches (unless `--fetch`), or deletes.
+## 워크트리 만들기
 
-| mark | meaning |
-| --- | --- |
-| `✓` | safe to remove: merged into the base branch, its PR/MR merged or closed (while the branch still points at the PR's last commit), or its upstream deleted — **and** no uncommitted changes, no unpushed commits, not locked |
-| `●` | stale: untouched for longer than `stale_days` (default 30) but not provably safe |
-| `!` | removing it would lose work: uncommitted changes (or ones git could not check), commits not on its upstream, or — with no upstream — commits not on the base branch |
+![wt create 데모: repo 안에서 fix/PAY-42 워크트리를 만들고 이동](docs/demo/create.gif)
 
-`ACTIVE` is the last activity in the worktree (its index/HEAD), `COMMIT` the branch's last
-commit; creation times are in the details pane. The base branch is `origin/HEAD`, else
-`origin/main` or `origin/master`, else the main checkout's branch. A branch with no commits of
-its own is "merged" — a worktree you just created and have not committed to shows `✓`.
+`create`는 빠진 인자만 묻는다. repo 안에서 실행하면 그 repo를 쓸지 먼저 확인하고, kind·ticket·base를 차례로 받은 뒤 요약을 보여 주고 `Create?`로 확인한다. 셸 통합으로 실행했다면 만든 워크트리로 바로 이동한다.
 
-| key | action |
-| --- | --- |
-| `enter` | cd into the worktree (shell integration only; `bin/workytree` prints the path) |
-| `ctrl-d` | `wt remove` the worktree, with its usual questions, then refresh |
-| `ctrl-o` | open the PR/MR in the browser |
-| `ctrl-r` | `git fetch` every repo, then refresh |
-| `ctrl-s` | show only `stale`/`safe` rows (again to show all) |
-| `ctrl-/` | switch the details pane between right and bottom |
+- 브랜치를 만들기 전에 `origin`을 fetch하므로 자동으로 고른 base(`origin/main` 등)가 항상 최신
+- `origin`이 없으면 fetch를 건너뛰고, fetch가 실패하면 경고 후 로컬 ref로 계속 진행
+- 같은 워크트리가 이미 있으면 새로 만들지 않고 재사용
 
-The details pane sits on the right when the terminal is at least 100 columns wide and below
-the list otherwise, following resizes while the list is open.
+## 상태 보기
 
-PR/MR data comes from `gh` (GitHub) or `glab` (GitLab, including self-hosted hosts `glab` is
-logged in to), one call per repo; without them, or with `--offline`, the PR column is empty
-and everything else still works. A squash or rebase merge leaves no ancestry for git to find,
-so such a branch only shows as merged while its PR/MR can be looked up.
+![wt status 데모: fzf 목록, 상세 창, 정리 대상 필터, Enter로 이동](docs/demo/status.gif)
 
-`✓` relies on `git status`, so it shares `remove`'s blind spot below: gitignored files such as
-`.env` do not count as work.
+`wt status`는 범위 안의 repo(`--project` 또는 `[repo]` 하나)에서 다음을 모두 보여 준다.
 
-    wt config set stale_days 14                  # every project
-    wt config set project.work.stale_days 60     # one project
+- 모든 워크트리
+- 워크트리가 없는 로컬 브랜치
+- `worktree_root` 아래에 있지만 git이 모르는 디렉터리
 
-Scripts should call `bin/workytree status --json` directly: through the `wt` function the
-output is captured first to look for a cd target.
+fzf 0.38 이상이 있고 양쪽이 터미널이면 상세 창이 있는 fzf 목록을 연다. `--plain`, fzf 없음·구버전, 출력 파이프 중 하나라도 해당하면 표로 출력하고, `--json`은 같은 데이터를 스크립트용으로 출력한다. 보기만 할 뿐 정리·fetch(`--fetch` 제외)·삭제는 하지 않는다.
 
-## AI sessions (opt-in)
+| 표시 | 뜻 |
+|---|---|
+| `✓` | 지워도 안전함: base 브랜치에 병합, PR/MR 병합·종료(브랜치가 PR 마지막 커밋을 가리킬 때), upstream 삭제 중 하나이면서 커밋 안 된 변경·push 안 된 커밋·잠금이 모두 없음 |
+| `●` | 오래됨: `stale_days`(기본 30일)보다 오래 손대지 않았지만 안전하다고 증명되지는 않음 |
+| `!` | 지우면 작업을 잃음: 커밋 안 된 변경(또는 확인 불가), upstream에 없는 커밋, upstream이 없으면 base에 없는 커밋 |
 
-`create` can hand the new worktree straight to an AI coding agent. It is **off by
-default**: no agent is offered, prompted for, or launched until you turn it on, and the
-temp file the wrapper would launch it through is not created either. See "Known
-limitations" below.
+| 키 | 동작 |
+|---|---|
+| `enter` | 워크트리로 이동 (셸 통합 전용, `bin/workytree`는 경로만 출력) |
+| `ctrl-d` | 평소 질문과 함께 `wt remove` 실행 후 새로고침 |
+| `ctrl-o` | 브라우저에서 PR/MR 열기 |
+| `ctrl-r` | 모든 repo `git fetch` 후 새로고침 |
+| `ctrl-s` | `stale`/`safe` 행만 보기 (다시 누르면 전체) |
+| `ctrl-/` | 상세 창을 오른쪽 ↔ 아래로 전환 |
 
-    wt create --ai fix PROJ-1        # this run only
-    wt config set ai_session always  # every run
+- `ACTIVE`: 워크트리의 마지막 활동(index/HEAD), `COMMIT`: 브랜치의 마지막 커밋, 생성 시각: 상세 창
+- base 브랜치는 `origin/HEAD`, 없으면 `origin/main`이나 `origin/master`, 그것도 없으면 메인 checkout의 브랜치
+- 자기 커밋이 없는 브랜치는 "병합됨" 처리. 방금 만들고 커밋하지 않은 워크트리도 `✓`
+- 상세 창은 터미널이 100열 이상이면 오른쪽, 아니면 아래에 표시되고 창 크기 변경에 맞춰 이동
 
-The agent runs in your current shell, in the new worktree, in the foreground — quit it
-and you are back in that worktree. This only works through the shell integration (`wt`,
-or `workytree` as the function this repo installs). Calling `bin/workytree` directly still
-creates the worktree either way, but never launches an agent: with AI sessions off (the
-default) that's silent, and with them turned on (`ai_session` other than `off`, or `--ai`)
-it instead prints a warning explaining why nothing launched.
+PR/MR 정보는 repo마다 한 번씩 `gh`(GitHub)나 `glab`(GitLab, `glab`이 로그인한 self-hosted 포함)을 호출해 가져온다. 둘 다 없거나 `--offline`이면 PR 열만 비고 나머지는 그대로 동작한다. squash·rebase 병합은 git이 추적할 조상 관계를 남기지 않으므로, 그런 브랜치는 PR/MR을 조회할 수 있을 때만 병합됨으로 표시된다.
 
-| key | scope | meaning |
-| --- | --- | --- |
-| `ai_session` | global, `[project]` | `off` (default), `ask` (confirm first), `always` |
-| `ai_agent` | global, `[project]` | which agent to run; unset means auto-detect |
+```sh
+wt config set stale_days 14                  # 모든 프로젝트
+wt config set project.work.stale_days 60     # 한 프로젝트
+```
 
-Auto-detection takes the first of `claude`, `codex`, `gemini`, `cursor-agent`, `aider`
-found on your `PATH`. `--ai` overrides `ai_session` for one run and skips the `ask`
-confirmation.
+스크립트에서는 `bin/workytree status --json`을 직접 호출한다. `wt` 함수를 거치면 이동할 경로를 찾으려고 출력을 먼저 가로채기 때문이다.
 
-Before launching, workytree offers the agent's useful options as menus — the same
-suggestion-list-plus-free-text shape `kinds` already uses, so you can always type a value
-that isn't listed. What gets asked comes from an `[agent <name>]` section:
+## 워크트리 지우기
 
-    [agent claude]
-    command         = claude
-    ask             = permission_mode,model,teammate_mode
-    permission_mode = plan,acceptEdits,auto,bypassPermissions,dontAsk,manual
-    model           = opus,sonnet,fable
-    effort          = low,medium,high,xhigh,max
-    teammate_mode   = auto,tmux,iterm2,in-process
+![wt remove 데모: 현재 워크트리를 지우고 병합된 브랜치를 삭제한 뒤 원본 repo로 이동](docs/demo/remove.gif)
 
-`ask` chooses which options are asked about and in what order — `effort` above is defined
-but not asked until you add it to `ask`. A key's `_` becomes `-` and gains a `--` prefix,
-so `permission_mode` builds `--permission-mode <value>`. Choosing `(skip)` omits the flag.
+터미널에서 실행하면 `remove`는 워크트리 밖의 것을 건드리기 전에 하나씩 묻는다.
 
-workytree ships exactly the block above as the built-in profile for `claude`. Writing your
-own `[agent claude]` section **replaces it wholesale** rather than merging, so you can
-shorten a list, not just extend it. An agent with no profile (`ai_agent = aider`) has no
-options to build menus from, but that alone doesn't skip the interview: under
-`ai_session = ask` it still asks "open a $name session here?" before running, with just
-no per-option menus after it; only `ai_session = always` (or `--ai`) runs it straight away.
+1. 어떤 워크트리를 지울지 (`repo`·`kind`·`ticket`이 빠졌을 때). 주어진 인자로 목록을 좁히고 지금 있는 워크트리를 먼저 제안
+2. 커밋 안 된 변경을 버릴지 (변경이 있을 때만. 거절하면 멈추고 `git stash -u`나 `--force`를 안내한다)
+3. 로컬 브랜치를 지울지. 병합된 브랜치는 기본값 예, 병합 안 된 브랜치는 강제 삭제를 한 번 더 확인
+4. 원격 브랜치를 지울지 (upstream이나 같은 이름의 `refs/remotes/<remote>/` ref가 있을 때). `git fetch --prune origin` 직후 확인. 원격에 삭제를 push하므로 기본값 아니오
+5. 지운 뒤 어디로 이동할지 (셸 통합으로 실행했을 때만)
+6. 계획 요약과 `Proceed?`
 
-`-y`/`--yes` skips the interview entirely and runs the bare `command`. Cancelling the
-interview (`q`) leaves the worktree in place and exits 0 — a session that did not open is
-never a failed `create`.
+단계마다 진행 표시줄이 나오고, 실패하면 `hint:` 줄로 해결 방법을 알려 주며, 마지막 요약에 지운 것·남긴 것·실패한 것을 정리한다.
 
-## Exit codes
+- `-y`를 주거나 터미널이 없으면 묻지 않고 옵션대로 처리한다: `-b`/`-B` 로컬 브랜치, `-r` 원격 브랜치, `--to <dir>` 이동할 곳
+- 지금 있는 워크트리를 지우면 `--to`가 없는 한 원본 repo로 이동
+- 브랜치 삭제가 실패해도 종료 코드는 유지. 그 시점에 워크트리는 이미 지워진 상태
 
-| code | meaning |
-| --- | --- |
-| 0 | success |
-| 1 | general error — a bad argument value (unknown repo/project, unmerged branch without `-B`, ...), or `init` refusing because a valid config already exists |
-| 2 | usage error — malformed command line: wrong number of arguments, an unknown flag |
-| 3 | a problem with the config **file's state** — not merely "no config". Covers: no config file; a config that fails to parse (duplicate section/key, an unparseable line); a config file that is unreadable or not a regular file; a `[project]` missing `repo_root` or `worktree_root`; a `repo_root`/`worktree_root` that is relative, `/`, or a strict ancestor of `$HOME`; and a config directory that isn't writable |
-| 130 | interactive prompt was cancelled (`q`, Esc, Ctrl-C or EOF) |
+> **주의**: gitignore된 파일(`.env`, `node_modules` 등)은 변경으로 치지 않으므로 경고 없이 함께 지워진다. [알려진 제약](#알려진-제약)을 참고한다.
 
-Two rough edges are known and deliberately not smoothed over here: `resolve_repo`'s "unsafe
-repo name" refusal and `prune`'s aggregate multi-repo failure both exit 1, where 3 would be
-more consistent with the table above.
+## 정리
 
-## Known limitations
+`wt prune [repo]`는 `git worktree prune`으로 사라진 워크트리 기록을 지우고, `worktree_root` 아래에서 git에 등록되지 않은 `<kind>/<ticket>` 디렉터리를 찾는다. 그 디렉터리에 버려도 되는 파일만 있으면 지우고, 그 밖의 경우(판단할 수 없을 때 포함)에는 남기고 경고한다.
 
-These were found during development and deliberately left as-is; you will hit one of them
-before you hit a bug.
+## AI 세션
 
-- **`remove` deletes gitignored files without warning.** `remove` decides whether a worktree
-  is safe to delete by asking git (`git status`) whether it's dirty. Anything gitignored —
-  `.env`, `node_modules`, build output — is invisible to `git status` by definition, so a
-  worktree holding nothing but gitignored files reads as perfectly clean and `remove` deletes
-  it outright: exit 0, no `--force` needed, no mention of what was inside (the interactive
-  `Proceed?` summary lists branches, not files).
-  This matches `git worktree remove`'s own behavior and is not a bug workytree fixes — but a
-  `.env` that exists nowhere else is gone the moment you run `remove`. Back up anything
-  gitignored you care about before removing a worktree.
-- **Bare repos are not discovered.** The `repo_root` scan looks for a `.git` entry (file or
-  directory) one level inside each candidate directory, so a bare repo (e.g. `project.git`,
-  which has no `.git` of its own) is silently absent from `repos`, `path`, and every other
-  form of repo resolution. "Bare repo + worktrees" is a common layout — if you use it, register
-  the bare repo explicitly with `workytree repo add <path-to-bare.git>`.
-- **A repo reachable only through a symlink is not discovered**, and neither is a repo that
-  sits exactly *at* `repo_root` itself rather than in a subdirectory below it. The scan does
-  not follow symlinks and only looks strictly inside `repo_root`. Use `workytree repo add` to
-  register either case explicitly.
-- **Positional ambiguity in `create`.** `create [repo] [kind] [ticket] [base]` treats the
-  first positional as the repo name whenever it matches a known repo. If you have a repo
-  literally named e.g. `fix`, then `wt create fix T1 main` resolves to repo=`fix`,
-  kind=`T1`, ticket=`main` — not "kind fix, ticket T1". Pass all four positionals, or run
-  `create` from inside the repo (or interactively), to sidestep the ambiguity.
-- **One incomplete `[project]` section rejects the whole config** for any command that needs
-  it (`create`, `list`, `path`, `prune`, `repos`, ...) — but `config path`, `config get`,
-  `config set`, and `config edit` keep working even then, so the config stays repairable
-  through the CLI itself (`workytree config set project.<name>.worktree_root <path>`).
-- **`wt` alias adoption.** If you hand-write a `wt` shell function whose body happens to be
-  identical to the one workytree installs, it is treated as workytree's own and silently
-  reasserted every time you re-source your shell config.
-- **`config_remove_section` can orphan a preceding comment.** Removing a `[project ...]` or
-  `[repo ...]` section deletes the header and its keys but leaves any comment line that was
-  written directly above it in place; a later `project add`/`repo add` that appends a new
-  section can end up with that orphaned comment sitting right above it, looking like it
-  describes the new (unrelated) section.
-- **`repo add` accepts any git working directory, not only a canonical clone** — pointing it
-  at a `git worktree` directory registers that worktree itself under its own name. It also
-  derives the registered name from a symlink's *resolved target*, not the symlink name you
-  typed, when `--name` isn't given.
-- **`teammate_mode` rides an undocumented `claude` flag.** `--teammate-mode` does not
-  appear in `claude --help`; its allowed values (`auto`, `tmux`, `iterm2`, `in-process`)
-  were found by probing an invalid one. It can change or disappear in any `claude`
-  release, and when it does the assembled command fails at launch. That is survivable
-  precisely because the list lives in config: drop `teammate_mode` from `ask` in your own
-  `[agent claude]` section and you are unblocked without waiting for a workytree release.
-- **An `[agent]` profile's `command` is tokenized like a shell command line, not read as free
-  text.** It is handed to the shell wrapper one argv element per line and read back with
-  `${(f)}`, which is what lets workytree avoid `eval` on a config-supplied string entirely —
-  but getting there means the value goes through `${(z)}`/`${(Q)}` first, with the usual
-  shell-quoting rules: wrap a multi-word value in double quotes (`command = claude --sys "be
-  brief"`) or escape a literal space with a backslash (`hello\ there`) to keep it as one
-  argument; either way the quotes/backslash are stripped before the agent sees it. An
-  *unquoted* backslash is consumed by the tokenizer as an escape character (`command = claude
-  --bare C:\path` delivers `C:path`, backslash gone) — but a backslash inside single or double
-  quotes survives like any other character: both `command = claude --bare 'C:\path\to'` and
-  `command = claude --bare "C:\path\to"` deliver `C:\path\to` intact. A `$'...'`-quoted control
-  character is a sharper edge: `command = claude --bare $'a\nb' --after` turns `$'a\nb'` into a
-  real newline, and because the runfile format is one argv element per line, that newline reads
-  back as a second element — the agent receives four arguments (`--bare`, `a`, `b`, `--after`)
-  instead of the three the config author wrote. And **arguments cannot be empty strings**:
-  `--flag ""` cannot be expressed in an `[agent]` profile.
-- **The AI-session launch channel is armed on every `create`, even with the feature off.**
-  **Turning AI sessions on takes effect in the next shell.** The wrapper works out whether
-  you have enabled them once, when your shell config sources it — answering that question
-  costs a CLI call, and it needs the answer before every `create` — so a shell that was
-  already running keeps the answer it started with. `workytree config set ai_session
-  ask|always` says so when you run it; `--ai` works immediately in any shell, and turning
-  sessions back **off** is honored immediately too, because the CLI re-reads `ai_session` on
-  every run. This is the same trade-off `alias_wt` makes.
+![AI 세션 데모: 워크트리를 만든 뒤 에이전트 세션을 열지 확인하고 실행](docs/demo/ai.gif)
 
-- **While AI sessions are on, a repository's `post-checkout` hook can interfere with the
-  launch.** The wrapper creates a temp file under `$TMPDIR` named `workytree-ai.XXXXXX`,
-  and after the `cd` it runs whatever that file contains. Only opted-in runs create one
-  (`--ai`, or `ai_session` set to `ask`/`always` somewhere in your config), so a user who
-  never enables the feature has no such file for anything to find. When you have enabled
-  it, a hook — which runs inside `git worktree add`, before the launch — can locate the
-  file by globbing and put its own command there.
+`create`는 새 워크트리를 AI 코딩 에이전트에 바로 넘길 수 있다. **기본값은 꺼짐**이다. 켜기 전에는 에이전트를 제안하거나 묻거나 실행하지 않고, 실행에 쓰는 임시 파일도 만들지 않는다.
 
-  This is not new code execution: a `post-checkout` hook already runs arbitrary code as you
-  on every `create`, feature or no feature. What changes is the context, from an unattended
-  captured subprocess to the foreground shell you are about to type into. It also cannot be
-  closed by hiding the path or the descriptor — on Linux a same-user process can read
-  another's exec-time environment through `/proc/<pid>/environ` and reach its open files
-  through `/proc/<pid>/fd` — so the channel existing only for opted-in runs is the property
-  workytree can actually offer, not a step toward a stronger one.
+```sh
+wt create --ai fix PROJ-1        # 이번 한 번만
+wt config set ai_session always  # 매번
+```
 
-## Development
+에이전트는 현재 셸에서, 새 워크트리 안에서, 포그라운드로 실행된다. 에이전트를 끝내면 그 워크트리에 그대로 남는다. 셸 통합(`wt`, 또는 이 저장소가 설치하는 `workytree` 함수)으로 실행할 때만 동작한다. `bin/workytree`를 직접 부르면 워크트리는 만들지만 에이전트는 실행하지 않고, AI 세션이 켜져 있으면 그 이유를 경고로 알려 준다.
 
-    zsh tests/run.zsh
+| 키 | 범위 | 뜻 |
+|---|---|---|
+| `ai_session` | 전역, `[project]` | `off`(기본), `ask`(먼저 확인), `always` |
+| `ai_agent` | 전역, `[project]` | 실행할 에이전트. 비우면 자동 감지 |
+
+자동 감지는 `PATH`에서 `claude`, `codex`, `gemini`, `cursor-agent`, `aider` 순서로 처음 찾은 것을 쓴다. `--ai`는 그 실행에 한해 `ai_session`을 덮어쓰고 `ask` 확인도 건너뛴다.
+
+실행 전에 에이전트의 주요 옵션을 메뉴로 묻는다. `kinds`처럼 목록에서 고르거나 목록에 없는 값을 직접 입력할 수 있다. 무엇을 물을지는 `[agent <name>]` 섹션이 정한다.
+
+```ini
+[agent claude]
+command         = claude
+ask             = permission_mode,model,teammate_mode
+permission_mode = plan,acceptEdits,auto,bypassPermissions,dontAsk,manual
+model           = opus,sonnet,fable
+effort          = low,medium,high,xhigh,max
+teammate_mode   = auto,tmux,iterm2,in-process
+```
+
+- `ask`: 물을 옵션과 순서. 위 예시의 `effort`는 `ask`에 넣기 전까지 묻지 않음
+- 키 이름 변환: `permission_mode` → `--permission-mode <value>`
+- `(skip)`을 고르면 그 플래그 없이 실행
+- 위 블록이 `claude`의 내장 프로필. 직접 쓴 `[agent claude]`는 합쳐지지 않고 **통째로 대체**하므로 목록을 줄일 수도 있음
+- 프로필이 없는 에이전트(`ai_agent = aider` 등)는 옵션 메뉴 없음. `ask`면 "open a $name session here?"만 묻고, `always`나 `--ai`면 바로 실행
+- `-y`/`--yes`: 질문 없이 `command`만 실행
+- 질문을 취소(`q`)해도 워크트리는 남고 종료 코드 0. 세션을 열지 않은 것은 `create` 실패로 치지 않음
+
+## 대화형 프롬프트
+
+`create`, `remove`, `init`, AI 세션의 질문은 모두 방향키와 Enter로 답한다.
+
+| 화면 | 이동 | 결정 | 바로 답하기 | 취소 |
+|---|---|---|---|---|
+| 예/아니오 확인 | ←/→ (↑/↓, Tab, h/j/k/l) | Enter. 기본값이 미리 선택됨 | `y` / `n` | `q`, Esc, Ctrl-C |
+| 목록 선택 (fzf 없음) | ↑/↓ 또는 j/k, 끝에서 반대쪽으로 넘어감 | Enter | 숫자 1–9 | `q`, Esc, Ctrl-C |
+| 목록 선택 (fzf 있음) | fzf 조작 그대로 | Enter | 검색어 입력 | Esc |
+
+- 직접 값을 입력할 수 있는 목록(`kind`, 에이전트 옵션)은 마지막 줄 `(type a value…)`를 고르면 한 줄 입력으로 전환
+- 취소하면 종료 코드 130
+
+## 설정
+
+설정 파일은 `~/.config/workytree/config`이다. `wt config path`로 위치를, `wt config edit`로 편집기를 연다.
+
+| 키 | 위치 | 기본값 | 설명 |
+|---|---|---|---|
+| `default_project` | 전역 | 없음 | 프로젝트를 고르지 않았을 때 쓸 프로젝트 |
+| `alias_wt` | 전역 | `true` | `wt` 별칭 설치 |
+| `kinds` | 전역 | `feature,fix,chore,hotfix,refactor` | `create`의 kind 목록 |
+| `stale_days` | 전역, `[project]` | `30` | `status`의 `●` 기준 일수 |
+| `ai_session` | 전역, `[project]` | `off` | [AI 세션](#ai-세션) 참고 |
+| `ai_agent` | 전역, `[project]` | 자동 감지 | [AI 세션](#ai-세션) 참고 |
+| `repo_root` | `[project]` | 필수 | repo를 찾을 디렉터리 |
+| `worktree_root` | `[project]` | 필수 | 워크트리를 만들 디렉터리 |
+| `scan_depth` | `[project]` | `3` | `repo_root` 스캔 깊이 |
+| `path`, `project` | `[repo]` | 필수 | 직접 등록한 repo의 경로와 프로젝트 |
+
+```sh
+wt config set stale_days 14
+wt config set project.work.worktree_root ~/work/worktrees
+```
+
+## 종료 코드
+
+| 코드 | 뜻 |
+|---|---|
+| 0 | 성공 |
+| 1 | 일반 오류: 잘못된 인자 값(모르는 repo·프로젝트, `-B` 없이 병합 안 된 브랜치 등), 또는 유효한 설정이 이미 있어 `init`이 거부함 |
+| 2 | 사용법 오류: 인자 개수가 틀림, 모르는 플래그 |
+| 3 | 설정 **파일 상태** 문제: 설정 파일 없음, 파싱 실패(중복 섹션·키, 읽을 수 없는 줄), 읽을 수 없거나 일반 파일이 아님, `[project]`에 `repo_root`·`worktree_root` 누락, `repo_root`·`worktree_root`가 상대 경로·`/`·`$HOME`의 상위 디렉터리, 설정 디렉터리에 쓸 수 없음 |
+| 130 | 대화형 질문 취소 (`q`, Esc, Ctrl-C, EOF) |
+
+`resolve_repo`의 "unsafe repo name" 거부와 `prune`의 여러 repo 일괄 실패는 3이 더 어울리지만 1로 끝난다. 알고 있는 어긋남이며 이번에는 고치지 않는다.
+
+## 알려진 제약
+
+개발 중에 발견했고 의도적으로 그대로 둔 동작이다. 버그보다 이쪽을 먼저 만나게 될 것이다.
+
+| 제약 | 대응 |
+|---|---|
+| `remove`가 gitignore된 파일을 경고 없이 지움 | 지우기 전에 `.env` 같은 파일을 따로 백업 |
+| bare repo(`project.git`)를 찾지 못함 | `workytree repo add <bare.git 경로>`로 등록 |
+| 심볼릭 링크로만 닿는 repo, `repo_root` 바로 그 위치의 repo를 찾지 못함 | `workytree repo add`로 등록 |
+| `create`의 첫 위치 인자가 알려진 repo 이름이면 repo로 해석됨 | 인자 네 개를 모두 쓰거나 repo 안에서·대화형으로 실행 |
+| `[project]` 하나가 불완전하면 설정 전체를 거부함 | `config path/get/set/edit`는 동작하므로 `config set project.<name>.worktree_root <path>`로 복구 |
+| 내용이 똑같은 `wt` 함수를 직접 쓰면 workytree 것으로 보고 셸 설정을 다시 읽을 때마다 덮어씀 | 직접 관리하려면 `alias_wt = false` |
+| 섹션을 지우면 그 위의 주석 줄이 남음 | 남은 주석을 직접 정리 |
+| `repo add`는 git 작업 디렉터리면 무엇이든 받음 | 워크트리가 아닌 원본 clone 경로를 지정, 심볼릭 링크면 `--name` 지정 |
+| `teammate_mode`는 문서화되지 않은 `claude` 플래그에 기댐 | 깨지면 자기 `[agent claude]`의 `ask`에서 `teammate_mode`를 뺌 |
+| `[agent]`의 `command`는 셸 명령줄처럼 토큰으로 나뉨 | 아래 상세 참고 |
+| AI 세션을 켜는 설정은 다음 셸부터 적용됨 | 새 셸을 열거나 `--ai` 사용 |
+| AI 세션이 켜져 있으면 `post-checkout` hook이 실행 내용을 바꿀 수 있음 | 아래 상세 참고 |
+
+<details>
+<summary><code>remove</code>와 gitignore된 파일</summary>
+
+`remove`는 `git status`로 워크트리가 깨끗한지 판단한다. gitignore된 파일은 정의상 `git status`에 보이지 않으므로, 그런 파일만 있는 워크트리는 깨끗하다고 판단해 그대로 지운다. 종료 코드는 0이고 `--force`도 필요 없으며, `Proceed?` 요약에도 파일은 나오지 않는다. `git worktree remove`와 같은 동작이라 workytree가 고치지는 않지만, 다른 곳에 없는 `.env`는 `remove`를 실행하는 순간 사라진다.
+
+</details>
+
+<details>
+<summary><code>[agent]</code> <code>command</code>의 토큰 처리</summary>
+
+`command`는 argv 한 원소당 한 줄로 셸 래퍼에 전달되고 `${(f)}`로 다시 읽힌다. 덕분에 설정 문자열에 `eval`을 쓰지 않지만, 그 전에 `${(z)}`/`${(Q)}`를 거치므로 셸 따옴표 규칙이 그대로 적용된다.
+
+| 쓴 값 | 에이전트가 받는 값 |
+|---|---|
+| `claude --sys "be brief"`, `hello\ there` | 따옴표·백슬래시가 빠진 인자 하나 |
+| `claude --bare C:\path` (따옴표 없음) | `C:path` (백슬래시가 이스케이프로 사라짐) |
+| `claude --bare 'C:\path\to'`, `"C:\path\to"` | `C:\path\to` 그대로 |
+| `claude --bare $'a\nb' --after` | 인자 네 개 `--bare`, `a`, `b`, `--after` (줄바꿈이 원소 구분자가 됨) |
+
+빈 문자열 인자(`--flag ""`)는 `[agent]` 프로필로 표현할 수 없다.
+
+</details>
+
+<details>
+<summary>AI 세션 설정이 다음 셸부터 적용되는 이유</summary>
+
+AI 세션을 켰는지는 셸 설정이 래퍼를 source할 때 한 번 확인한다. 이 확인에는 CLI 호출이 들어가고 `create` 전에 답이 필요하므로, 이미 실행 중인 셸은 시작할 때의 답을 유지한다. `workytree config set ai_session ask|always`는 실행할 때 이 사실을 알려 준다. `--ai`는 어느 셸에서든 바로 동작하고, **끄는** 설정은 CLI가 매번 `ai_session`을 다시 읽으므로 바로 적용된다. `alias_wt`와 같은 절충이다.
+
+</details>
+
+<details>
+<summary>AI 세션과 <code>post-checkout</code> hook</summary>
+
+래퍼는 `$TMPDIR` 아래에 `workytree-ai.XXXXXX` 임시 파일을 만들고, `cd` 뒤에 그 파일의 내용을 실행한다. 이 파일은 AI 세션을 켠 실행(`--ai`, 또는 설정 어딘가의 `ai_session = ask|always`)에서만 만든다. 기능을 켰다면 `git worktree add` 중에 도는 hook이 glob으로 이 파일을 찾아 자기 명령을 넣을 수 있다.
+
+새로운 코드 실행 경로는 아니다. `post-checkout` hook은 기능과 상관없이 매 `create`마다 사용자 권한으로 임의 코드를 실행한다. 달라지는 것은 실행 맥락으로, 가로채는 하위 프로세스에서 곧 입력할 포그라운드 셸로 바뀐다. 경로나 파일 디스크립터를 숨겨도 막을 수 없다. Linux에서는 같은 사용자 프로세스가 `/proc/<pid>/environ`과 `/proc/<pid>/fd`로 다른 프로세스의 환경과 열린 파일에 접근할 수 있기 때문이다. 그래서 켠 실행에서만 이 경로가 생긴다는 점이 workytree가 실제로 보장할 수 있는 성질이다.
+
+</details>
+
+## 개발
+
+```sh
+zsh tests/run.zsh                 # 전체 테스트
+zsh docs/demo/render.zsh          # README GIF 다시 녹화 (vhs, ffmpeg 필요)
+zsh docs/demo/render.zsh status   # 하나만
+```
+
+GIF는 `docs/demo/setup.zsh`가 만드는 임시 샌드박스(`$TMPDIR/workytree-demo`)에서 녹화하므로 실제 설정과 repo는 건드리지 않는다. 장면은 `docs/demo/*.tape`에서 고친다.
