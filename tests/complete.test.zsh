@@ -15,6 +15,7 @@ EOF
 test_complete_sources() {
   fixture
   assert_contains "$(wt __complete commands)" "create"
+  assert_contains "$(wt __complete commands)" "status"
   assert_eq "$(wt __complete projects)" "me"
   assert_eq "$(wt __complete repos)" "app"
   assert_contains "$(wt __complete kinds app)" "fix"

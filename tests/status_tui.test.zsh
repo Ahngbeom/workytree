@@ -1,0 +1,221 @@
+#!/usr/bin/env zsh
+# The fzf renderer, with fzf stubbed as a shell function (bin/workytree's PATH would put a real
+# install ahead of any fake executable). The stub records its arguments and answers with a
+# canned selection.
+source "${0:A:h}/helpers.zsh"
+for f in ui config resolve prompt worktree forge status; do source "$WT_TEST_ROOT/lib/$f.zsh"; done
+for f in prune remove status; do source "$WT_TEST_ROOT/lib/cmd/$f.zsh"; done
+
+fixture() {
+  make_repo "$HOME/src/app"
+  typeset -ga WT_PROJECTS=(me)
+  typeset -gA WT_PCFG=(me.repo_root "$HOME/src" me.worktree_root "$HOME/wts") WT_CFG=() WT_RCFG=()
+  git -C "$HOME/src/app" worktree add -q -b fix/A "$HOME/wts/app/fix/A"
+  git -C "$HOME/src/app" branch lonely
+  WORKYTREE_HOME="$HOME/with space/workytree"
+  WT_PROJECT_OPT='' WT_COLOR=0
+  _status_parse_opts --offline
+  RECORDS="$(status_collect_repo me app "$HOME/src/app" 30)"
+  : > "$HOME/notes"
+}
+
+# fzf_selecting <type>: stub fzf that saves its argv (one per line) and stdin, then prints the
+# first input line whose record type is <type> (nothing for "none", i.e. esc).
+fzf_selecting() {
+  FZF_PICK="$1"
+  fzf() {
+    [[ "$1" == --version ]] && { print -r -- "0.55.0 (stub)"; return; }
+    print -rl -- "$@" > "$HOME/fzf.args"
+    cat > "$HOME/fzf.in"
+    local l
+    for l in "${(@f)$(<"$HOME/fzf.in")}"; do
+      [[ "$l" == "$FZF_PICK"$'\t'* ]] && { print -r -- "$l"; return 0; }
+    done
+    return 130
+  }
+}
+
+test_enter_on_worktree_prints_its_path_last() {
+  fixture; fzf_selecting worktree
+  assert_eq "$(_status_run_fzf "$RECORDS" "$HOME/notes")" "$HOME/wts/app/fix/A"
+}
+
+test_enter_on_branch_row_prints_nothing() {
+  fixture; fzf_selecting branch
+  assert_eq "$(_status_run_fzf "$RECORDS" "$HOME/notes")" ""
+}
+
+test_esc_prints_nothing_and_succeeds() {
+  fixture; fzf_selecting none
+  local out; out="$(_status_run_fzf "$RECORDS" "$HOME/notes")"
+  assert_eq "$?" 0
+  assert_eq "$out" ""
+}
+
+test_fzf_input_is_record_plus_display_field() {
+  fixture; fzf_selecting none
+  _status_run_fzf "$RECORDS" "$HOME/notes" >/dev/null
+  local -a f; f=("${(@ps:\t:)$(head -1 "$HOME/fzf.in")}")
+  assert_eq "${#f}" 27
+  assert_contains "$(<"$HOME/fzf.args")" "--with-nth=27"
+}
+
+test_bindings_quote_a_bin_path_with_spaces() {
+  fixture; fzf_selecting none
+  _status_run_fzf "$RECORDS" "$HOME/notes" >/dev/null
+  local args; args="$(<"$HOME/fzf.args")"
+  local qbin="${(q)WORKYTREE_HOME}/bin/workytree"
+  assert_contains "$args" "ctrl-d:execute($qbin __status-action remove {})+reload($qbin __status-rows --no-color --offline)"
+  assert_contains "$args" "ctrl-r:reload($qbin __status-rows --no-color --offline)"
+  assert_contains "$args" "--preview=$qbin __status-preview {}"
+  # The reload command must split back into the same words a shell would see.
+  local cmd="$qbin __status-rows --no-color --offline"
+  local -a words; words=("${(Q@)${(z)cmd}}")
+  assert_eq "${words[1]}" "$WORKYTREE_HOME/bin/workytree"
+}
+
+test_reload_args_carry_scope_and_stale_filter() {
+  fixture
+  WT_PROJECT_OPT=me
+  _status_parse_opts app --stale 7
+  _status_reload_args
+  assert_eq "${reply[*]}" "--project me --no-color app --stale 7"
+  _status_parse_opts
+  WT_PROJECT_OPT='' WT_COLOR=1
+  _status_reload_args
+  assert_eq "${reply[*]}" ""
+}
+
+test_refresh_fetches_unless_offline() {
+  fixture; fzf_selecting none
+  _status_parse_opts
+  _status_run_fzf "$RECORDS" "$HOME/notes" >/dev/null
+  assert_contains "$(<"$HOME/fzf.args")" "ctrl-r:reload(${(q)WORKYTREE_HOME}/bin/workytree __status-rows --no-color --fetch)"
+}
+
+test_notes_appear_in_the_header() {
+  fixture; fzf_selecting none
+  print -r -- "app: github lookup failed (exit 4)" > "$HOME/notes"
+  _status_run_fzf "$RECORDS" "$HOME/notes" >/dev/null
+  assert_contains "$(<"$HOME/fzf.args")" "note: app: github lookup failed (exit 4)"
+}
+
+# ctrl-d removed the worktree this shell stands in: send the shell back to the main checkout.
+test_removed_current_worktree_sends_shell_to_main_checkout() {
+  fixture; fzf_selecting none
+  local out
+  out="$(cd "$HOME/wts/app/fix/A" && git -C "$HOME/src/app" worktree remove "$HOME/wts/app/fix/A" && _status_run_fzf "$RECORDS" "$HOME/notes")"
+  assert_eq "$out" "$HOME/src/app"
+}
+
+test_old_fzf_falls_back() {
+  fzf() { print -r -- "0.30.0 (old)"; }
+  local err; err="$(_status_fzf_ok 2>&1)"
+  assert_eq "$?" 1
+  assert_contains "$err" "fzf 0.30.0 is older than 0.38"
+  fzf() { print -r -- "0.38.1 (ok)"; }
+  _status_fzf_ok 2>/dev/null
+  assert_eq "$?" 0
+  unfunction fzf
+}
+
+test_action_refuses_non_worktree_rows() {
+  fixture
+  local branch_line; branch_line="$(print -r -- "$RECORDS" | grep '^branch')"
+  local err; err="$(cmd___status-action remove "$branch_line" 2>&1 </dev/null)"
+  assert_contains "$err" "only worktrees under worktree_root can be removed from here"
+  assert_contains "$err" "branch -d lonely"
+}
+
+# fzf searches only the displayed field (--with-nth=27), so ctrl-s's "stale" query and typed
+# filters like "gone" need the tags on screen.
+test_display_field_carries_the_searchable_tags() {
+  fixture; fzf_selecting none
+  _status_run_fzf "$RECORDS" "$HOME/notes" >/dev/null
+  local line; line="$(grep $'^branch\t' "$HOME/fzf.in")"
+  local -a f; f=("${(@ps:\t:)line}")
+  assert_contains "${f[27]}" "safe merged"
+}
+
+# fzf picks the layout itself and re-picks it on every resize; a width measured once at
+# start-up left split panes (narrower than the old 120-column cut-off) stuck top/bottom.
+test_layout_follows_the_terminal_width_and_toggles() {
+  fixture; fzf_selecting none
+  _status_run_fzf "$RECORDS" "$HOME/notes" >/dev/null
+  local args; args="$(<"$HOME/fzf.args")"
+  assert_contains "$args" "--preview-window=right,50%,<100(down,50%)"
+  assert_contains "$args" "ctrl-/:change-preview-window(down,50%|right,50%)"
+  assert_contains "$args" "ctrl-/: layout"
+}
+
+
+# Moving the cursor must not count as activity: the preview's `git status` would otherwise
+# refresh the index, whose mtime is the ACTIVE age.
+test_preview_does_not_rewrite_the_index() {
+  fixture
+  local gd before after line
+  gd="$(git -C "$HOME/wts/app/fix/A" rev-parse --absolute-git-dir)"
+  touch -t 202401010000 "$gd/index"
+  touch "$HOME/wts/app/fix/A/README.md"
+  before="$(zstat +mtime "$gd/index")"
+  line="$(print -r -- "$RECORDS" | grep $'^worktree\t')"
+  cmd___status-preview "$line" >/dev/null
+  after="$(zstat +mtime "$gd/index")"
+  assert_eq "$after" "$before"
+}
+
+# fzf runs every binding through $SHELL -c; the bindings are POSIX sh, so a fish or nushell
+# login shell must not be the one that parses them.
+test_bindings_run_under_posix_sh() {
+  fixture
+  fzf() { [[ "$1" == --version ]] && { print -r -- "0.55.0 (stub)"; return; }; print -r -- "$SHELL" > "$HOME/fzf.shell"; cat >/dev/null; return 130; }
+  SHELL=/usr/local/bin/fish _status_run_fzf "$RECORDS" "$HOME/notes" >/dev/null
+  assert_eq "$(<"$HOME/fzf.shell")" /bin/sh
+}
+
+# run_in_background_pgrp <zsh code>: run <code> the way fzf runs reload and preview commands --
+# in a process group that is NOT the foreground group of its controlling terminal -- and print
+# "exited <rc>" or "stopped" (SIGTTOU/SIGTTIN). Needs python3 for the pseudo-terminal.
+run_in_background_pgrp() {
+  python3 - "$1" <<'PY'
+import os, pty, sys, time, signal
+code = sys.argv[1]
+pid, fd = pty.fork()                       # child: session leader with the pty as its terminal
+if pid == 0:
+    gc = os.fork()
+    if gc == 0:
+        os.setpgid(0, 0)                   # own group, never made the terminal's foreground
+        os.execv('/bin/zsh', ['zsh', '-c', code])
+    end = time.time() + 10
+    while time.time() < end:
+        done, status = os.waitpid(gc, os.WUNTRACED | os.WNOHANG)
+        if done:
+            if os.WIFSTOPPED(status):
+                os.kill(gc, signal.SIGKILL); print('stopped', flush=True); os._exit(0)
+            print('exited', os.WEXITSTATUS(status), flush=True); os._exit(0)
+        time.sleep(0.05)
+    os.kill(gc, signal.SIGKILL); print('timeout', flush=True); os._exit(0)
+out = b''
+while True:
+    try: chunk = os.read(fd, 1024)
+    except OSError: break
+    if not chunk: break
+    out += chunk
+os.waitpid(pid, 0)
+print(out.decode().strip().splitlines()[-1])
+PY
+}
+
+# fzf runs ctrl-d's reload and the details pane in a background process group; zsh's
+# `read -d` touches the terminal and gets the whole reload stopped, so the list never refreshed.
+test_rows_and_orphan_preview_finish_outside_the_foreground_group() {
+  (( $+commands[python3] )) || { print -u2 "  (skipped: python3 not installed)"; return 0; }
+  fixture
+  mkdir -p "$HOME/wts/app/fix/ORPH/.idea"
+  local libs="setopt extendedglob; for f in $WT_TEST_ROOT/lib/*.zsh $WT_TEST_ROOT/lib/cmd/*.zsh; do source \$f; done"
+  local pcfg="typeset -ga WT_PROJECTS=(me); typeset -gA WT_PCFG=(me.repo_root $HOME/src me.worktree_root $HOME/wts) WT_CFG=() WT_RCFG=()"
+  assert_eq "$(run_in_background_pgrp "$libs; $pcfg; status_collect_repo me app $HOME/src/app 30 >/dev/null")" "exited 0" collect
+  assert_eq "$(run_in_background_pgrp "$libs; dir_is_cruft_only $HOME/wts/app/fix/ORPH")" "exited 0" cruft-check
+}
+
+run_tests

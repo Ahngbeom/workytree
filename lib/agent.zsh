@@ -24,18 +24,7 @@ WT_AI_BUILTIN=(
 typeset -ga WT_AI_PROBE_ORDER
 WT_AI_PROBE_ORDER=(claude codex gemini cursor-agent aider)
 
-# ai_setting <project> <key>: project value -> global value. rc 1 if neither is set.
-# No repo-level tier: a [repo] section only exists for explicitly registered repos, so a
-# repo discovered by scanning could never use that tier -- the rule would apply
-# asymmetrically.
-ai_setting() {
-  local project="$1" key="$2"
-  if [[ -n "$project" ]] && (( ${+WT_PCFG[$project.$key]} )); then
-    print -r -- "${WT_PCFG[$project.$key]}"; return 0
-  fi
-  (( ${+WT_CFG[$key]} )) || return 1
-  print -r -- "${WT_CFG[$key]}"
-}
+ai_setting() { project_setting "$@"; }
 
 # ai_session_mode <project>: always prints one of off|ask|always. An unrecognized value
 # warns on stderr and falls back to off -- a single typo must never make create itself

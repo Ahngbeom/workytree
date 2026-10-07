@@ -113,4 +113,37 @@ test_prune_candidate_is_contained_accepts_real_candidate() {
   assert_exit 0 _prune_candidate_is_contained "/wts/app/fix/T" "/wts/app" "/wts"
 }
 
+# _prune_scan is what `status` calls: it must report orphans without running
+# `git worktree prune` and without deleting anything.
+test_prune_scan_lists_orphans_without_touching_anything() {
+  make_repo "$HOME/src/app"
+  set_project "$HOME/src" "$HOME/wts"
+  git -C "$HOME/src/app" worktree add -q -b fix/LIVE "$HOME/wts/app/fix/LIVE"
+  git -C "$HOME/src/app" worktree add -q -b fix/GONE "$HOME/wts/app/fix/GONE"
+  rm -rf "$HOME/wts/app/fix/GONE"
+  mkdir -p "$HOME/wts/app/fix/ORPHAN/.idea"
+  _prune_scan me app "$HOME/src/app"
+  assert_eq "$?" 0
+  assert_eq "${WT_SCAN_ORPHANS[*]}" "$HOME/wts/app/fix/ORPHAN"
+  assert_dir "$HOME/wts/app/fix/ORPHAN"
+  assert_contains "$(git -C "$HOME/src/app" worktree list --porcelain)" "$HOME/wts/app/fix/GONE"
+}
+
+test_prune_scan_returns_2_when_repo_has_no_worktree_dir() {
+  make_repo "$HOME/src/app"
+  set_project "$HOME/src" "$HOME/wts"
+  _prune_scan me app "$HOME/src/app"
+  assert_eq "$?" 2
+}
+
+test_prune_scan_keeps_a_newline_in_an_orphan_name_whole() {
+  make_repo "$HOME/src/app"
+  set_project "$HOME/src" "$HOME/wts"
+  git -C "$HOME/src/app" worktree add -q -b fix/LIVE "$HOME/wts/app/fix/LIVE"
+  mkdir -p "$HOME/wts/app/fix/ORPH"$'\n'"AN"
+  _prune_scan me app "$HOME/src/app"
+  assert_eq "${#WT_SCAN_ORPHANS}" 1
+  assert_eq "${WT_SCAN_ORPHANS[1]}" "$HOME/wts/app/fix/ORPH"$'\n'"AN"
+}
+
 run_tests
