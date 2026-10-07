@@ -146,6 +146,10 @@ its own is "merged" — a worktree you just created and have not committed to sh
 | `ctrl-o` | open the PR/MR in the browser |
 | `ctrl-r` | `git fetch` every repo, then refresh |
 | `ctrl-s` | show only `stale`/`safe` rows (again to show all) |
+| `ctrl-/` | switch the details pane between right and bottom |
+
+The details pane sits on the right when the terminal is at least 100 columns wide and below
+the list otherwise, following resizes while the list is open.
 
 PR/MR data comes from `gh` (GitHub) or `glab` (GitLab, including self-hosted hosts `glab` is
 logged in to), one call per repo; without them, or with `--offline`, the PR column is empty

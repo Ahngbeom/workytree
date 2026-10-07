@@ -137,15 +137,17 @@ test_display_field_carries_the_searchable_tags() {
   assert_contains "${f[27]}" "safe merged"
 }
 
-# Without a terminal (CI, a pipe) the width probe must fall back quietly: a shell error about
-# /dev/tty would land in fzf's preview or the user's terminal.
-test_preview_window_probe_is_quiet() {
-  local err out
-  err="$(_status_preview_window 2>&1 >/dev/null)"
-  out="$(_status_preview_window 2>/dev/null)"
-  assert_eq "$err" ""
-  [[ "$out" == (right|down),50% ]]; assert_eq "$?" 0 "layout: $out"
+# fzf picks the layout itself and re-picks it on every resize; a width measured once at
+# start-up left split panes (narrower than the old 120-column cut-off) stuck top/bottom.
+test_layout_follows_the_terminal_width_and_toggles() {
+  fixture; fzf_selecting none
+  _status_run_fzf "$RECORDS" "$HOME/notes" >/dev/null
+  local args; args="$(<"$HOME/fzf.args")"
+  assert_contains "$args" "--preview-window=right,50%,<100(down,50%)"
+  assert_contains "$args" "ctrl-/:change-preview-window(down,50%|right,50%)"
+  assert_contains "$args" "ctrl-/: layout"
 }
+
 
 # Moving the cursor must not count as activity: the preview's `git status` would otherwise
 # refresh the index, whose mtime is the ACTIVE age.

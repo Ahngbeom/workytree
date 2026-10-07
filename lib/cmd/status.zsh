@@ -324,11 +324,6 @@ _status_fzf_ok() {
   return 1
 }
 
-_status_preview_window() {
-  local size; size="$({ stty size < /dev/tty; } 2>/dev/null)"
-  (( ${${size##* }:-0} >= 120 )) && print -r -- 'right,50%' || print -r -- 'down,50%'
-}
-
 # _status_reload_args: reply = the options that reproduce this listing in __status-rows.
 _status_reload_args() {
   reply=()
@@ -358,7 +353,7 @@ _status_run_fzf() {
   local qbin="${(q)bin}"
   local rows_cmd="$qbin __status-rows${args:+ ${(j: :)${(q)args[@]}}}"
   local fetch_cmd="$rows_cmd"; (( ST_OFFLINE )) || fetch_cmd+=" --fetch"
-  local header="enter: cd · ctrl-d: remove · ctrl-o: open PR · ctrl-r: refresh with fetch · ctrl-s: stale only"
+  local header="enter: cd · ctrl-d: remove · ctrl-o: open PR · ctrl-r: refresh with fetch · ctrl-s: stale only · ctrl-/: layout"
   _status_format "$records"
   header+=$'\n'"$ST_HEADER"
   if [[ -s "$notes_file" ]]; then
@@ -367,10 +362,11 @@ _status_run_fzf() {
   # fzf runs bindings through $SHELL -c, and they are written for sh, not the user's shell.
   sel="$(_status_fzf_input | SHELL=/bin/sh fzf --ansi --no-sort --layout=reverse \
     --delimiter=$'\t' --with-nth=27 --header="$header" \
-    --preview="$qbin __status-preview {}" --preview-window="$(_status_preview_window)" \
+    --preview="$qbin __status-preview {}" --preview-window='right,50%,<100(down,50%)' \
     --bind="ctrl-d:execute($qbin __status-action remove {})+reload($rows_cmd)" \
     --bind="ctrl-o:execute-silent($qbin __status-action open {})" \
     --bind="ctrl-r:reload($fetch_cmd)" \
+    --bind='ctrl-/:change-preview-window(down,50%|right,50%)' \
     --bind="ctrl-s:transform-query(if [ {q} = stale ]; then echo; else echo stale; fi)")"
   if [[ -n "$sel" ]]; then
     f=("${(@ps:\t:)sel}")

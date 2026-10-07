@@ -237,8 +237,10 @@ commit_age_s created_at merged gone dirty ahead behind base_ahead base_behind lo
 브랜치 삭제)을 그대로 쓴다. 이 자식 프로세스에는 `WORKYTREE_CD_CAPABLE`을 넘기지 않으므로
 destination 질문은 나오지 않는다.
 
-헤더에는 키 안내 한 줄과 §5.3 notes를 표시한다. preview 창은 오른쪽 50%에 두고, 터미널 폭이
-120 미만이면 아래쪽 50%에 둔다.
+헤더에는 키 안내 한 줄과 §5.3 notes를 표시한다. preview 창은 fzf의 반응형 문법
+`right,50%,<100(down,50%)`로 두어, 폭 100칸 이상이면 오른쪽, 미만이면 아래에 놓고 실행 중
+창 크기 변화도 따른다. `ctrl-/`가 `change-preview-window(down,50%|right,50%)`로 배치를 수동 전환한다.
+(처음에는 시작 시 `stty size`로 한 번 재고 기준 120칸이었으나, 분할 pane에서 항상 위아래로 고정돼 바꿨다.)
 
 ### 7.4 preview (`__status-preview <type> <repo_path> <path> <branch>`)
 
