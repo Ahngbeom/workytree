@@ -171,4 +171,49 @@ test_bindings_run_under_posix_sh() {
   assert_eq "$(<"$HOME/fzf.shell")" /bin/sh
 }
 
+# run_in_background_pgrp <zsh code>: run <code> the way fzf runs reload and preview commands --
+# in a process group that is NOT the foreground group of its controlling terminal -- and print
+# "exited <rc>" or "stopped" (SIGTTOU/SIGTTIN). Needs python3 for the pseudo-terminal.
+run_in_background_pgrp() {
+  python3 - "$1" <<'PY'
+import os, pty, sys, time, signal
+code = sys.argv[1]
+pid, fd = pty.fork()                       # child: session leader with the pty as its terminal
+if pid == 0:
+    gc = os.fork()
+    if gc == 0:
+        os.setpgid(0, 0)                   # own group, never made the terminal's foreground
+        os.execv('/bin/zsh', ['zsh', '-c', code])
+    end = time.time() + 10
+    while time.time() < end:
+        done, status = os.waitpid(gc, os.WUNTRACED | os.WNOHANG)
+        if done:
+            if os.WIFSTOPPED(status):
+                os.kill(gc, signal.SIGKILL); print('stopped', flush=True); os._exit(0)
+            print('exited', os.WEXITSTATUS(status), flush=True); os._exit(0)
+        time.sleep(0.05)
+    os.kill(gc, signal.SIGKILL); print('timeout', flush=True); os._exit(0)
+out = b''
+while True:
+    try: chunk = os.read(fd, 1024)
+    except OSError: break
+    if not chunk: break
+    out += chunk
+os.waitpid(pid, 0)
+print(out.decode().strip().splitlines()[-1])
+PY
+}
+
+# fzf runs ctrl-d's reload and the details pane in a background process group; zsh's
+# `read -d` touches the terminal and gets the whole reload stopped, so the list never refreshed.
+test_rows_and_orphan_preview_finish_outside_the_foreground_group() {
+  (( $+commands[python3] )) || { print -u2 "  (skipped: python3 not installed)"; return 0; }
+  fixture
+  mkdir -p "$HOME/wts/app/fix/ORPH/.idea"
+  local libs="setopt extendedglob; for f in $WT_TEST_ROOT/lib/*.zsh $WT_TEST_ROOT/lib/cmd/*.zsh; do source \$f; done"
+  local pcfg="typeset -ga WT_PROJECTS=(me); typeset -gA WT_PCFG=(me.repo_root $HOME/src me.worktree_root $HOME/wts) WT_CFG=() WT_RCFG=()"
+  assert_eq "$(run_in_background_pgrp "$libs; $pcfg; status_collect_repo me app $HOME/src/app 30 >/dev/null")" "exited 0" collect
+  assert_eq "$(run_in_background_pgrp "$libs; dir_is_cruft_only $HOME/wts/app/fix/ORPH")" "exited 0" cruft-check
+}
+
 run_tests

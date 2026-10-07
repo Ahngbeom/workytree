@@ -94,8 +94,14 @@ _prune_scan() {
     return 1
   fi
 
+  # M-2: NUL-delimited, matching dir_is_cruft_only's own convention -- a newline-delimited
+  # read would split a directory name containing an embedded newline into fragments, so
+  # prune_repo's warning/removal would name a nonexistent path and the real orphan would never be
+  # inspected at all. Split with (0), not `read -d`: see dir_is_cruft_only.
   local dir dir_canon
-  while IFS= read -r -d '' dir; do
+  local -a found
+  found=("${(@0)$(find "$repo_wt_root" -mindepth 2 -maxdepth 2 -type d -print0 2>/dev/null)}")
+  for dir in "${found[@]}"; do
     [[ -n "$dir" ]] || continue
     dir_canon="${dir:A}"
     # Containment guard: the candidate must actually resolve under BOTH repo_wt_root_canon
@@ -106,11 +112,7 @@ _prune_scan() {
     _prune_candidate_is_contained "$dir_canon" "$repo_wt_root_canon" "$configured_wt_root_canon" || continue
     [[ -n "${WT_SCAN_REGISTERED[$dir_canon]:-}" ]] && continue
     WT_SCAN_ORPHANS+=("$dir")
-  # M-2: NUL-delimited, matching dir_is_cruft_only's own convention -- a newline-delimited
-  # read would split a directory name containing an embedded newline into fragments, so
-  # prune_repo's warning/removal would name a nonexistent path and the real orphan would never be
-  # inspected at all.
-  done < <(find "$repo_wt_root" -mindepth 2 -maxdepth 2 -type d -print0 2>/dev/null)
+  done
   return 0
 }
 

@@ -117,7 +117,13 @@ dir_is_cruft_only() {
   rm -f "$err_file"
   if (( rc != 0 )) || [[ -n "$err" ]]; then rm -f "$out_file"; return 1; fi
   base="${1%/}/"
-  while IFS= read -r -d '' f; do
+  # Split with (0), not `read -d ''`: zsh's `read -d` reconfigures the terminal, and in a
+  # process group that is not the terminal's foreground (fzf's preview and reload commands)
+  # that stops the whole command with SIGTTOU.
+  local -a found
+  found=("${(@0)$(<"$out_file")}")
+  for f in "${found[@]}"; do
+    [[ -n "$f" ]] || continue
     rel="${f#$base}"
     # R25 still holds relative to the candidate: a FILE named exactly ".idea" (no slash
     # after it -- distinct from a ".idea/" DIRECTORY's contents) never matches either
@@ -127,7 +133,7 @@ dir_is_cruft_only() {
       .DS_Store|*/.DS_Store) ;;
       *) rm -f "$out_file"; return 1 ;;
     esac
-  done < "$out_file"
+  done
   rm -f "$out_file"
   return 0
 }

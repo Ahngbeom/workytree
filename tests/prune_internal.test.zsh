@@ -136,4 +136,14 @@ test_prune_scan_returns_2_when_repo_has_no_worktree_dir() {
   assert_eq "$?" 2
 }
 
+test_prune_scan_keeps_a_newline_in_an_orphan_name_whole() {
+  make_repo "$HOME/src/app"
+  set_project "$HOME/src" "$HOME/wts"
+  git -C "$HOME/src/app" worktree add -q -b fix/LIVE "$HOME/wts/app/fix/LIVE"
+  mkdir -p "$HOME/wts/app/fix/ORPH"$'\n'"AN"
+  _prune_scan me app "$HOME/src/app"
+  assert_eq "${#WT_SCAN_ORPHANS}" 1
+  assert_eq "${WT_SCAN_ORPHANS[1]}" "$HOME/wts/app/fix/ORPH"$'\n'"AN"
+}
+
 run_tests
