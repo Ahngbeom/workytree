@@ -3,7 +3,8 @@
 WT_DEMO_REPO="${WT_DEMO_REPO:-$PWD}"
 WT_DEMO_ROOT="${WORKYTREE_DEMO_ROOT:-${TMPDIR:-/tmp}/workytree-demo}"
 [[ -f "$WT_DEMO_REPO/bin/workytree" ]] || { print -u2 "run from the workytree checkout"; return 1; }
-[[ "${WT_DEMO_ROOT:t}" == workytree-demo* ]] && rm -rf "$WT_DEMO_ROOT"
+[[ "${WT_DEMO_ROOT:t}" == workytree-demo* ]] || { print -u2 "WORKYTREE_DEMO_ROOT must be named workytree-demo*: $WT_DEMO_ROOT"; return 1; }
+rm -rf "$WT_DEMO_ROOT"
 mkdir -p "$WT_DEMO_ROOT/home"
 WT_DEMO_ROOT="${WT_DEMO_ROOT:A}"   # /tmp is a symlink on macOS; the prompt's ~ needs the real path
 

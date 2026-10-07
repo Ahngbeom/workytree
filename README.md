@@ -164,6 +164,7 @@ fzf 0.38 이상이 있고 양쪽이 터미널이면 상세 창이 있는 fzf 목
 - base 브랜치는 `origin/HEAD`, 없으면 `origin/main`이나 `origin/master`, 그것도 없으면 메인 checkout의 브랜치
 - 자기 커밋이 없는 브랜치는 "병합됨" 처리. 방금 만들고 커밋하지 않은 워크트리도 `✓`
 - 상세 창은 터미널이 100열 이상이면 오른쪽, 아니면 아래에 표시되고 창 크기 변경에 맞춰 이동
+- `✓`도 `git status`로 판단하므로 `remove`와 같은 사각지대가 있음: gitignore된 `.env` 같은 파일은 작업으로 치지 않음
 
 PR/MR 정보는 repo마다 한 번씩 `gh`(GitHub)나 `glab`(GitLab, `glab`이 로그인한 self-hosted 포함)을 호출해 가져온다. 둘 다 없거나 `--offline`이면 PR 열만 비고 나머지는 그대로 동작한다. squash·rebase 병합은 git이 추적할 조상 관계를 남기지 않으므로, 그런 브랜치는 PR/MR을 조회할 수 있을 때만 병합됨으로 표시된다.
 
@@ -250,7 +251,7 @@ teammate_mode   = auto,tmux,iterm2,in-process
 | 목록 선택 (fzf 있음) | fzf 조작 그대로 | Enter | 검색어 입력 | Esc |
 
 - 직접 값을 입력할 수 있는 목록(`kind`, 에이전트 옵션)은 마지막 줄 `(type a value…)`를 고르면 한 줄 입력으로 전환
-- 취소하면 종료 코드 130
+- 취소하면 종료 코드 130. 단, AI 세션 질문은 워크트리를 만든 뒤라 취소해도 0
 
 ## 설정
 
@@ -282,7 +283,7 @@ wt config set project.work.worktree_root ~/work/worktrees
 | 1 | 일반 오류: 잘못된 인자 값(모르는 repo·프로젝트, `-B` 없이 병합 안 된 브랜치 등), 또는 유효한 설정이 이미 있어 `init`이 거부함 |
 | 2 | 사용법 오류: 인자 개수가 틀림, 모르는 플래그 |
 | 3 | 설정 **파일 상태** 문제: 설정 파일 없음, 파싱 실패(중복 섹션·키, 읽을 수 없는 줄), 읽을 수 없거나 일반 파일이 아님, `[project]`에 `repo_root`·`worktree_root` 누락, `repo_root`·`worktree_root`가 상대 경로·`/`·`$HOME`의 상위 디렉터리, 설정 디렉터리에 쓸 수 없음 |
-| 130 | 대화형 질문 취소 (`q`, Esc, Ctrl-C, EOF) |
+| 130 | 대화형 질문 취소 (`q`, Esc, Ctrl-C, EOF). AI 세션 질문 취소는 제외 |
 
 `resolve_repo`의 "unsafe repo name" 거부와 `prune`의 여러 repo 일괄 실패는 3이 더 어울리지만 1로 끝난다. 알고 있는 어긋남이며 이번에는 고치지 않는다.
 
