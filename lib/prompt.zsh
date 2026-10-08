@@ -54,7 +54,9 @@ prompt_choose() {
   if (( $+commands[fzf] )) && [[ -z "${WORKYTREE_PROMPT_INPUT:-}" ]]; then
     local -a fz; fz=(--prompt "$msg> " --height 40% --reverse)
     (( allow_free )) && fz+=(--print-query)
-    REPLY="$(printf '%s\n' "${items[@]}" | fzf "${fz[@]}" < /dev/tty 2> /dev/tty | tail -1)"
+    # No `< /dev/tty`: under zsh MULTIOS it is appended to the piped items, so fzf never sees
+    # EOF and a second reader steals keystrokes. fzf opens /dev/tty for keys itself.
+    REPLY="$(printf '%s\n' "${items[@]}" | fzf "${fz[@]}" | tail -1)"
     [[ -n "$REPLY" ]] || exit 130
     return 0
   fi
