@@ -4,7 +4,7 @@ set -u
 setopt extendedglob
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin:${PATH:-}"
 
-typeset -g WORKYTREE_VERSION="0.2.0"
+typeset -g WORKYTREE_VERSION="0.2.1"
 typeset -g WORKYTREE_HOME="${0:A:h:h}"   # :A resolves the ~/.local/bin symlink
 
 # The shell wrapper (shell/workytree.zsh) mktemps a runfile and exports its path into our
