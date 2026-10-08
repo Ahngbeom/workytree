@@ -65,6 +65,15 @@ test_choose_cancel_exits_130() {
   assert_eq "$?" 130
 }
 
+test_choose_fzf_reads_only_the_items() {
+  unset WORKYTREE_PROMPT_INPUT WORKYTREE_PROMPT_KEYS
+  commands[fzf]=/usr/bin/true
+  fzf() { cat > "$TMP_ROOT/fzf.in"; sed -n 2p "$TMP_ROOT/fzf.in"; }
+  assert_eq "$(choose 0 a b c)" "b"
+  assert_eq "$(<"$TMP_ROOT/fzf.in")" $'a\nb\nc'
+  unfunction fzf; unhash fzf
+}
+
 test_line_mode_is_unchanged_without_keys() {
   print -l 2 > "$TMP_ROOT/answers"; export WORKYTREE_PROMPT_INPUT="$TMP_ROOT/answers"
   assert_eq "$(choose 0 a b c)" "b"
