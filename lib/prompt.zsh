@@ -16,9 +16,32 @@ _prompt_open() {
 _prompt_say() {
   if [[ -n "${WORKYTREE_PROMPT_INPUT:-}" ]]; then print -n -r -- "$@" >&2; else print -n -r -- "$@" > /dev/tty; fi
 }
+# vared keymap: the line is an answer, not a command line, so completion keys must not list
+# every command on $PATH. Ctrl-D cancels on an empty line, as EOF did with plain `read`.
+_prompt_eof_or_delete() { if [[ -z "$BUFFER" ]]; then zle send-break; else zle delete-char; fi; }
+_prompt_keymap() {
+  bindkey -l workytree-prompt &>/dev/null && return 0
+  zmodload zsh/zle
+  zle -N _prompt_eof_or_delete
+  bindkey -N workytree-prompt main
+  bindkey -M workytree-prompt '^D' _prompt_eof_or_delete
+  local k
+  for k in '^I' '^[^D' '^Xg' '^XG' '^X*' '^[$' '^[s' '^[S'; do bindkey -M workytree-prompt "$k" undefined-key; done
+}
+
+# _prompt_read <prompt> -> REPLY. vared on a terminal: plain `read` echoes arrows as ^[[D.
 _prompt_read() {
+  # The prompt can carry a git branch name; a ~/.zshenv prompt_subst would run $(...) in it.
+  setopt localoptions noprompt_subst noprompt_bang
   _prompt_open
-  if ! read -u $WT_PROMPT_FD -r REPLY; then _prompt_say $'\n'; exit 130; fi
+  if [[ -z "${WORKYTREE_PROMPT_INPUT:-}" && -t $WT_PROMPT_FD ]]; then
+    REPLY=''
+    _prompt_keymap
+    vared -M workytree-prompt -p "${1//\%/%%}" REPLY <&$WT_PROMPT_FD > /dev/tty 2>&1 || { _prompt_say $'\n'; exit 130; }
+  else
+    _prompt_say "$1"
+    if ! read -u $WT_PROMPT_FD -r REPLY; then _prompt_say $'\n'; exit 130; fi
+  fi
   [[ "$REPLY" == q ]] && exit 130
 }
 
@@ -28,7 +51,7 @@ prompt_confirm() {
   if _prompt_keys; then _prompt_confirm_keys "$msg" "$def"; return; fi
   [[ "$def" == y ]] && hint="[Y/n]" || hint="[y/N]"
   while true; do
-    _prompt_say "$msg $hint "; _prompt_read
+    _prompt_read "$msg $hint "
     case "${REPLY:l}" in
       "")   [[ "$def" == y ]] && return 0 || return 1 ;;
       y|yes) return 0 ;;
@@ -41,7 +64,7 @@ prompt_confirm() {
 prompt_input() {
   local msg="$1" def="${2:-}"
   while true; do
-    _prompt_say "$msg${def:+ [$def]}: "; _prompt_read
+    _prompt_read "$msg${def:+ [$def]}: "
     [[ -z "$REPLY" && -n "$def" ]] && REPLY="$def"
     [[ -n "$REPLY" ]] && return 0
   done
@@ -65,8 +88,7 @@ prompt_choose() {
   _prompt_say "$msg"$'\n'
   for (( i = 1; i <= ${#items}; i++ )); do _prompt_say "  $i) ${items[$i]}"$'\n'; done
   while true; do
-    if (( allow_free )); then _prompt_say "choose [1-${#items}] or type a value: "; else _prompt_say "choose [1-${#items}]: "; fi
-    _prompt_read
+    if (( allow_free )); then _prompt_read "choose [1-${#items}] or type a value: "; else _prompt_read "choose [1-${#items}]: "; fi
     if [[ "$REPLY" == <1-> ]] && (( REPLY >= 1 && REPLY <= ${#items} )); then REPLY="${items[$REPLY]}"; return 0; fi
     (( allow_free )) && [[ -n "$REPLY" ]] && return 0
   done
