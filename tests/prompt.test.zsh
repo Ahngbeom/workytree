@@ -79,4 +79,28 @@ test_line_mode_is_unchanged_without_keys() {
   assert_eq "$(choose 0 a b c)" "b"
 }
 
+# tty_input <keys> [default]: prompt_input on a real pseudo-terminal, fed <keys>; prints REPLY.
+tty_input() {
+  zmodload zsh/zpty
+  local out="$TMP_ROOT/tty.out" script="$TMP_ROOT/tty.zsh" screen s=''
+  local -i i
+  rm -f "$out"
+  # A zpty starts 0 columns wide, and ZLE draws no prompt at width 0.
+  print -r -- "stty cols 80; source ${(q)WT_TEST_ROOT}/lib/ui.zsh; source ${(q)WT_TEST_ROOT}/lib/prompt.zsh
+    prompt_input ticket ${(q)2:-}; print -r -- \"\$REPLY\" > ${(q)out}" > "$script"
+  zpty wt zsh -f "${(q)script}"
+  for (( i = 0; i < 50; i++ )); do zpty -r -t wt screen && s+="$screen"; [[ "$s" == *ticket* ]] && break; sleep 0.1; done
+  zpty -w -n wt "$(printf '%b' "$1")"
+  # Without draining the pty here, the child never writes $out.
+  for (( i = 0; i < 50; i++ )); do [[ -s $out ]] && break; zpty -r -t wt screen; sleep 0.1; done
+  zpty -d wt
+  [[ -s $out ]] && print -r -- "$(<$out)"
+}
+
+test_input_arrows_move_the_cursor_on_a_terminal() {
+  assert_eq "$(tty_input "abd$LEFT${LEFT}c\r")" "acbd" "left arrow edits mid-line"
+  assert_eq "$(tty_input "ac${LEFT}b$RIGHT${RIGHT}d\r")" "abcd" "right arrow moves back"
+  assert_eq "$(tty_input "\r" main)" "main" "Enter on an empty line takes the default"
+}
+
 run_tests
