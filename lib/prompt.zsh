@@ -18,6 +18,8 @@ _prompt_say() {
 }
 # _prompt_read <prompt> -> REPLY. vared on a terminal: plain `read` echoes arrows as ^[[D.
 _prompt_read() {
+  # The prompt can carry a git branch name; a ~/.zshenv prompt_subst would run $(...) in it.
+  setopt localoptions noprompt_subst noprompt_bang
   _prompt_open
   if [[ -z "${WORKYTREE_PROMPT_INPUT:-}" && -t $WT_PROMPT_FD ]]; then
     REPLY=''
