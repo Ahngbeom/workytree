@@ -16,6 +16,19 @@ _prompt_open() {
 _prompt_say() {
   if [[ -n "${WORKYTREE_PROMPT_INPUT:-}" ]]; then print -n -r -- "$@" >&2; else print -n -r -- "$@" > /dev/tty; fi
 }
+# vared keymap: the line is an answer, not a command line, so completion keys must not list
+# every command on $PATH. Ctrl-D cancels on an empty line, as EOF did with plain `read`.
+_prompt_eof_or_delete() { if [[ -z "$BUFFER" ]]; then zle send-break; else zle delete-char; fi; }
+_prompt_keymap() {
+  bindkey -l workytree-prompt &>/dev/null && return 0
+  zmodload zsh/zle
+  zle -N _prompt_eof_or_delete
+  bindkey -N workytree-prompt main
+  bindkey -M workytree-prompt '^D' _prompt_eof_or_delete
+  local k
+  for k in '^I' '^[^D' '^Xg' '^XG' '^X*' '^[$' '^[s' '^[S'; do bindkey -M workytree-prompt "$k" undefined-key; done
+}
+
 # _prompt_read <prompt> -> REPLY. vared on a terminal: plain `read` echoes arrows as ^[[D.
 _prompt_read() {
   # The prompt can carry a git branch name; a ~/.zshenv prompt_subst would run $(...) in it.
@@ -23,7 +36,8 @@ _prompt_read() {
   _prompt_open
   if [[ -z "${WORKYTREE_PROMPT_INPUT:-}" && -t $WT_PROMPT_FD ]]; then
     REPLY=''
-    vared -p "${1//\%/%%}" REPLY <&$WT_PROMPT_FD > /dev/tty 2>&1 || { _prompt_say $'\n'; exit 130; }
+    _prompt_keymap
+    vared -M workytree-prompt -p "${1//\%/%%}" REPLY <&$WT_PROMPT_FD > /dev/tty 2>&1 || { _prompt_say $'\n'; exit 130; }
   else
     _prompt_say "$1"
     if ! read -u $WT_PROMPT_FD -r REPLY; then _prompt_say $'\n'; exit 130; fi

@@ -103,6 +103,16 @@ test_input_arrows_move_the_cursor_on_a_terminal() {
   assert_eq "$(tty_input "\r" main)" "main" "Enter on an empty line takes the default"
 }
 
+test_input_has_no_shell_completion_on_a_terminal() {
+  assert_eq "$(tty_input "\tab\x1b\x04c\r")" "abc" "Tab and Esc Ctrl-D insert and list nothing"
+  assert_eq "$(tty_input "abx${LEFT}\x04\r")" "ab" "Ctrl-D mid-line deletes the character under the cursor"
+}
+
+test_input_ctrl_d_on_an_empty_line_cancels() {
+  tty_input "\x04" > /dev/null
+  assert_not_exists "$TMP_ROOT/tty.out"
+}
+
 test_input_prompt_text_is_never_expanded() {
   local def='$(touch pwned)%~'
   assert_eq "$(tty_input "\r" "$def" "setopt prompt_subst")" "$def"
