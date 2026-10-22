@@ -132,6 +132,8 @@ wt config get|set|edit|path
 - 브랜치를 만들기 전에 `origin`을 fetch하므로 자동으로 고른 base(`origin/main` 등)가 항상 최신
 - `origin`이 없으면 fetch를 건너뛰고, fetch가 실패하면 경고 후 로컬 ref로 계속 진행
 - 같은 워크트리가 이미 있으면 새로 만들지 않고 재사용
+- `Create?`를 묻거나 디렉터리를 만들기 전에 값을 검사한다. kind·ticket을 git 브랜치 이름으로 쓸 수 없으면(kind에 `/`, 공백, `..` 등) 종료 코드 2, base가 없거나 브랜치가 이미 다른 곳에 체크아웃돼 있으면 1로 멈춘다. 대화형으로 입력한 값이면 다시 묻는다
+- `-`로 시작하는 값은 `--` 뒤에 쓴다: `wt create -- app fix -T2`. 그 밖의 `-`로 시작하는 인자는 모르는 플래그(종료 코드 2)
 
 ## 상태 보기
 
@@ -287,7 +289,7 @@ wt config set project.work.worktree_root ~/work/worktrees
 |---|---|
 | 0 | 성공 |
 | 1 | 일반 오류: 잘못된 인자 값(모르는 repo·프로젝트, `-B` 없이 병합 안 된 브랜치 등), 또는 유효한 설정이 이미 있어 `init`이 거부함 |
-| 2 | 사용법 오류: 인자 개수가 틀림, 모르는 플래그 |
+| 2 | 사용법 오류: 인자 개수가 틀림, 모르는 플래그, 형식이 틀린 이름(`create`의 kind·ticket·base) |
 | 3 | 설정 **파일 상태** 문제: 설정 파일 없음, 파싱 실패(중복 섹션·키, 읽을 수 없는 줄), 읽을 수 없거나 일반 파일이 아님, `[project]`에 `repo_root`·`worktree_root` 누락, `repo_root`·`worktree_root`가 상대 경로·`/`·`$HOME`의 상위 디렉터리, 설정 디렉터리에 쓸 수 없음 |
 | 130 | 대화형 질문 취소 (`q`, Esc, Ctrl-C, EOF). AI 세션 질문 취소는 제외 |
 

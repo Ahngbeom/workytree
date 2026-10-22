@@ -55,6 +55,53 @@ create_pick_repo() {
   repo_path="${row##*$'\t'}"
 }
 
+# _create_name_ok <repo_path> <kind> [ticket]: rc 0 when <kind>, and <kind>/<ticket> when a
+# ticket is given, can name a worktree branch; otherwise prints why on stderr.
+_create_name_ok() {
+  local repo_path="$1" kind="$2"
+  if [[ "$kind" == */* ]] || ! git -C "$repo_path" check-ref-format --branch "$kind" >/dev/null 2>&1; then
+    error "invalid kind: $kind"
+    hint "a kind is one branch-name segment without '/', e.g. fix"
+    return 1
+  fi
+  (( $# < 3 )) && return 0
+  git -C "$repo_path" check-ref-format --branch "$kind/$3" >/dev/null 2>&1 && return 0
+  error "invalid ticket: $3 ('$kind/$3' is not a valid git branch name)"
+  hint "no spaces, '..', '~', '^', ':', '?', '*', '[' or '\\'; see: git check-ref-format --help"
+  return 1
+}
+
+# _create_base_ok <repo_path> <base>: rc 0 when <base> names a commit; otherwise prints why.
+_create_base_ok() {
+  git -C "$1" rev-parse --verify --quiet "$2^{commit}" >/dev/null && return 0
+  error "base not found: $2"
+  hint "list branches with: git -C $1 branch -a"
+  return 1
+}
+
+# _create_checked_out_at <repo_path> <branch>: REPLY = the existing checkout that has <branch>
+# checked out; rc 1 when none has.
+_create_checked_out_at() {
+  local line wt=""
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) wt="${line#worktree }" ;;
+      "branch refs/heads/$2") [[ -d "$wt" ]] && { REPLY="$wt"; return 0; } ;;
+    esac
+  done < <(git -C "$1" worktree list --porcelain 2>/dev/null)
+  return 1
+}
+
+# _create_failed <dir> <top>: removes <dir> and its parents up to <top> -- the directories
+# create made for the target -- while they are empty, then dies.
+_create_failed() {
+  local d="$1"
+  if [[ -n "$2" ]]; then
+    while rmdir -- "$d" 2>/dev/null && [[ "$d" != "$2" ]]; do d="${d:h}"; done
+  fi
+  die "failed to create worktree"
+}
+
 # create_do <project> <repo> <repo_path> <kind> <ticket> <base_ref> [base_label]
 # Prints the summary, adds the worktree, and prints the path as the LAST line. base_ref is
 # the raw ref handed to git; base_label is the human-facing display text (may carry the
@@ -75,13 +122,15 @@ create_do() {
     fi
     die "target path exists but is not a worktree of $repo_path: $target (remove it, or run 'workytree prune' once available)"
   fi
+  local made="" d="${target:h}"
+  while [[ ! -e "$d" ]]; do made="$d"; d="${d:h}"; done
   mkdir -p "${target:h}" || die "failed to create parent directory for $target"
   if git -C "$repo_path" show-ref --verify --quiet "refs/heads/$branch"; then
     info "base ref: n/a (existing branch)"
-    git -C "$repo_path" worktree add "$target" "$branch" || die "failed to create worktree"
+    git -C "$repo_path" worktree add "$target" "$branch" || _create_failed "${target:h}" "$made"
   else
     info "base ref: $base_label"
-    git -C "$repo_path" worktree add --no-track -b "$branch" "$target" "$base_ref" || die "failed to create worktree"
+    git -C "$repo_path" worktree add --no-track -b "$branch" "$target" "$base_ref" || _create_failed "${target:h}" "$made"
   fi
   success "result: created"
   print -r -- "$target"
@@ -127,29 +176,58 @@ cmd_create() {
 
   if [[ -z "$kind" ]]; then
     prompt_available || usage_error "kind is required: workytree create [repo] <kind> <ticket> [base]"
-    prompt_choose "kind" 1 ${(f)"$(config_kinds)"}; kind="$REPLY"
+    while true; do
+      prompt_choose "kind" 1 ${(f)"$(config_kinds)"}; kind="$REPLY"
+      _create_name_ok "$repo_path" "$kind" && break
+    done
+  elif ! _create_name_ok "$repo_path" "$kind"; then
+    exit 2
   fi
   if [[ -z "$ticket" ]]; then
     prompt_available || usage_error "ticket is required: workytree create [repo] <kind> <ticket> [base]"
-    prompt_input "ticket" ""; ticket="$REPLY"
+    while true; do
+      prompt_input "ticket" ""; ticket="$REPLY"
+      _create_name_ok "$repo_path" "$kind" "$ticket" && break
+    done
+  elif ! _create_name_ok "$repo_path" "$kind" "$ticket"; then
+    exit 2
+  fi
+  if [[ "$base" == -* ]]; then
+    error "invalid base: $base"; hint "a base is a branch, tag or commit; none starts with '-'"; exit 2
   fi
 
-  local target; target="$(worktree_path "$project" "$repo" "$kind" "$ticket")"
+  local target branch
+  target="$(worktree_path "$project" "$repo" "$kind" "$ticket")"
+  branch="$(wt_branch_name "$kind" "$ticket")"
   [[ -e "$target" ]] || wt_fetch_origin "$repo_path"
   # base_ref/base_label split: see the note on create_do (R22).
   local base_ref="$base" base_label="$base"
-  if [[ -z "$base_ref" && ! -e "$target" ]] && ! git -C "$repo_path" show-ref --verify --quiet "refs/heads/$(wt_branch_name "$kind" "$ticket")"; then
-    local auto; auto="$(default_base_ref "$repo_path")" || exit $?
-    if prompt_available; then prompt_input "base branch" "$auto"; base_ref="$REPLY"; else base_ref="$auto"; fi
-    base_label="$base_ref"
-    [[ "$base_ref" == "$auto" ]] && base_label="$auto (auto-detected)"
+  if [[ ! -e "$target" ]] && ! git -C "$repo_path" show-ref --verify --quiet "refs/heads/$branch"; then
+    if [[ -n "$base_ref" ]]; then
+      _create_base_ok "$repo_path" "$base_ref" || exit 1
+    else
+      local auto; auto="$(default_base_ref "$repo_path")" || exit $?
+      base_ref="$auto"
+      if prompt_available; then
+        while true; do
+          prompt_input "base branch" "$auto"; base_ref="$REPLY"
+          _create_base_ok "$repo_path" "$base_ref" && break
+        done
+      fi
+      base_label="$base_ref"
+      [[ "$base_ref" == "$auto" ]] && base_label="$auto (auto-detected)"
+    fi
+  elif [[ ! -e "$target" ]] && _create_checked_out_at "$repo_path" "$branch"; then
+    die_with_hints "$branch is already checked out at $REPLY" \
+      "work there instead: cd $REPLY" \
+      "or free the branch first: git -C $REPLY switch <another branch>"
   fi
 
   if prompt_available && [[ ! -e "$target" ]]; then
     dim "──────────────────────────────" >&2
     print -u2 -r -- "repo:    $repo → $repo_path"
     print -u2 -r -- "target:  $target"
-    print -u2 -r -- "branch:  $(wt_branch_name "$kind" "$ticket")${base_label:+  (base: $base_label)}"
+    print -u2 -r -- "branch:  $branch${base_label:+  (base: $base_label)}"
     prompt_confirm "Create?" y || exit 130
   fi
   create_do "$project" "$repo" "$repo_path" "$kind" "$ticket" "$base_ref" "$base_label"

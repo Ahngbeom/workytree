@@ -97,4 +97,20 @@ test_eof_cancels_without_side_effects() {
   assert_not_exists "$HOME/wts"
 }
 
+test_invalid_typed_ticket_is_asked_again() {
+  fixture; answers "1" "my ticket" "T9" "" ""   # kind feature, bad ticket, ticket, base auto, confirm
+  local err; err="$(wt create app 2>&1 >/dev/null)"
+  assert_eq "$?" 0
+  assert_contains "$err" "invalid ticket: my ticket"
+  assert_dir "$HOME/wts/app/feature/T9"
+}
+
+test_invalid_typed_base_is_asked_again() {
+  fixture; answers "nope" "" ""                  # bad base, base auto, confirm
+  local err; err="$(wt create app fix B1 2>&1 >/dev/null)"
+  assert_eq "$?" 0
+  assert_contains "$err" "base not found: nope"
+  assert_dir "$HOME/wts/app/fix/B1"
+}
+
 run_tests

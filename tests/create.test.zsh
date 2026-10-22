@@ -183,4 +183,48 @@ test_create_dashdash_still_passes_a_literal_dash_ticket() {
   assert_eq "$(git -C "$HOME/wts/app/fix/-T2" branch --show-current)" "fix/-T2"
 }
 
+test_create_rejects_ill_formed_names_before_creating_anything() {
+  origin_fixture
+  local out; out="$(wt create app fix 'my ticket' -y 2>&1)"
+  assert_eq "$?" 2 space
+  assert_contains "$out" "invalid ticket: my ticket"
+  assert_contains "$out" "hint:"
+  assert_eq "${out//fetching/}" "$out" "no fetch"
+  assert_exit 2 wt create app fix .. -y
+  assert_exit 2 wt create app fix/sub T -y
+  assert_exit 2 wt create -- app -x T -y
+  assert_not_exists "$HOME/wts"
+}
+
+test_create_rejects_a_bad_base_before_creating_anything() {
+  origin_fixture
+  local out; out="$(wt create app fix T nonexistent-base 2>&1)"
+  assert_eq "$?" 1
+  assert_contains "$out" "base not found: nonexistent-base"
+  assert_not_exists "$HOME/wts"
+  out="$(wt create -- app fix T -x 2>&1)"
+  assert_eq "$?" 2 dash-base
+  assert_contains "$out" "invalid base: -x"
+  assert_not_exists "$HOME/wts"
+}
+
+test_create_reports_a_branch_checked_out_elsewhere_before_creating_anything() {
+  fixture
+  git -C "$HOME/src/app" checkout -q -b fix/HERE
+  local out; out="$(wt create app fix HERE 2>&1)"
+  assert_eq "$?" 1
+  assert_contains "$out" "fix/HERE is already checked out at $HOME/src/app"
+  assert_contains "$out" "hint:"
+  assert_not_exists "$HOME/wts"
+}
+
+test_create_removes_the_directories_it_made_when_git_fails() {
+  fixture
+  mkdir -p "$HOME/src/app/.git/refs/heads/fix"; : > "$HOME/src/app/.git/refs/heads/fix/L.lock"
+  local out; out="$(wt create app fix L main 2>&1)"
+  assert_eq "$?" 1
+  assert_contains "$out" "failed to create worktree"
+  assert_not_exists "$HOME/wts"
+}
+
 run_tests
