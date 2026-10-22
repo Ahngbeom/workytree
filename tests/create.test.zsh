@@ -67,38 +67,39 @@ test_create_unknown_repo_outside_project() {
   assert_exit 1 wt create ghost fix T
 }
 
-# R21: a stale plain directory sitting at the target path is not a worktree and must not be
-# reported as "reused" -- create_do has to verify the path is actually registered against
-# $repo_path via `git worktree list`, not just check -e.
 test_create_stale_plain_dir_at_target_is_not_reused() {
   fixture
-  mkdir -p "$HOME/wts/app/fix/STALE1"
-  local out; out="$(wt create app fix STALE1 main 2>&1)"
+  mkdir -p "$HOME/wts/app/fix/ORPH"; print n > "$HOME/wts/app/fix/ORPH/n.txt"
+  local out; out="$(wt create app fix ORPH main 2>&1)"
   assert_eq "$?" 1
-  assert_contains "$out" "workytree: target path exists but is not a worktree of"
-  assert_contains "$out" "STALE1"
+  assert_contains "$out" "workytree: target path already exists and is not a worktree: $HOME/wts/app/fix/ORPH"
+  assert_contains "$out" "move or delete it, then retry"
+  assert_eq "${out//once available/}" "$out" "no stale wording"
+  mkdir -p "$HOME/wts/app/fix/IDE/.idea"; : > "$HOME/wts/app/fix/IDE/.idea/ws.xml"
+  out="$(wt create app fix IDE main 2>&1)"
+  assert_eq "$?" 1 cruft-only
+  assert_contains "$out" "workytree prune app"
 }
 
-# R21, inverse-of-above: a plain FILE at the target is the same bug, not just a directory.
 test_create_stale_plain_file_at_target_is_not_reused() {
   fixture
   mkdir -p "$HOME/wts/app/fix"
   print "junk" > "$HOME/wts/app/fix/STALE2"
   local out; out="$(wt create app fix STALE2 main 2>&1)"
   assert_eq "$?" 1
-  assert_contains "$out" "workytree: target path exists but is not a worktree of"
+  assert_contains "$out" "already exists and is not a worktree"
+  assert_eq "${out//workytree prune/}" "$out" "prune does not remove files"
 }
 
-# R21: pins the CURRENT behavior for the inverse case (a worktree git still has registered,
-# but whose directory was deleted from disk) so a later change cannot silently regress it into
-# something worse than a clearly-diagnosed, workytree-prefixed failure.
-test_create_missing_but_registered_worktree_fails_loudly() {
+test_create_after_a_manual_delete_points_to_prune() {
   fixture
   wt create app fix GONE main >/dev/null
   rm -rf "$HOME/wts/app/fix/GONE"
   local out; out="$(wt create app fix GONE main 2>&1)"
   assert_eq "$?" 1
-  assert_contains "$out" "workytree: failed to create worktree"
+  assert_contains "$out" "still registered at $HOME/wts/app/fix/GONE"
+  assert_contains "$out" "workytree prune app"
+  assert_eq "${out//missing but already registered/}" "$out" "no raw git error"
 }
 
 # R22: a base ref containing a space must never be silently truncated by splitting a display
@@ -225,6 +226,64 @@ test_create_removes_the_directories_it_made_when_git_fails() {
   assert_eq "$?" 1
   assert_contains "$out" "failed to create worktree"
   assert_not_exists "$HOME/wts"
+}
+
+# remote_branch_fixture <branch>: <branch> exists on origin only, one commit ahead of main.
+remote_branch_fixture() {
+  origin_fixture
+  git -C "$HOME/other" switch -q -c "$1"
+  print w > "$HOME/other/w.txt"; git -C "$HOME/other" add -A; git -C "$HOME/other" commit -qm teammate
+  git -C "$HOME/other" push -q origin "$1"
+}
+
+test_create_tracks_a_branch_that_exists_only_on_origin() {
+  remote_branch_fixture fix/PROJ-9
+  local out w="$HOME/wts/app/fix/PROJ-9"
+  out="$(wt create app fix PROJ-9 -y 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$out" "existing remote branch origin/fix/PROJ-9"
+  assert_eq "$(git -C "$w" rev-parse HEAD)" "$(git -C "$HOME/other" rev-parse HEAD)" "teammate's commit"
+  assert_eq "$(git -C "$w" rev-parse --abbrev-ref '@{upstream}')" origin/fix/PROJ-9 tracking
+}
+
+test_create_remote_branch_asks_no_base_and_ignores_one_given() {
+  remote_branch_fixture fix/PROJ-9
+  print > "$TMP_ROOT/answers"                     # Create?: Enter
+  local out; out="$(WORKYTREE_PROMPT_INPUT="$TMP_ROOT/answers" wt create app fix PROJ-9 main 2>&1)"
+  assert_eq "$?" 0 "the one answer went to Create?"
+  assert_contains "$out" "branch:  fix/PROJ-9  (existing remote branch origin/fix/PROJ-9)"
+  assert_contains "$out" "base main ignored"
+}
+
+test_create_summary_says_an_existing_branch_ignores_the_base() {
+  fixture
+  git -C "$HOME/src/app" branch fix/EX3
+  print > "$TMP_ROOT/answers"
+  local out; out="$(WORKYTREE_PROMPT_INPUT="$TMP_ROOT/answers" wt create app fix EX3 origin/does-not-matter 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$out" "branch:  fix/EX3  (existing branch; base ignored)"
+  assert_contains "$out" "base origin/does-not-matter ignored"
+}
+
+test_create_reuse_reports_the_checked_out_branch() {
+  fixture
+  wt create app fix RU main >/dev/null
+  git -C "$HOME/wts/app/fix/RU" switch -q -c experiment
+  local out; out="$(wt create app fix RU 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$out" "checked out: experiment"
+  assert_contains "$out" "not on its ticket branch fix/RU"
+  assert_eq "${out##*$'\n'}" "$HOME/wts/app/fix/RU"
+}
+
+# Asserts nothing on a case-sensitive filesystem, where proj-1 is a different, missing worktree.
+test_create_reuse_names_the_registered_branch_for_a_case_variant_ticket() {
+  fixture
+  wt create app fix PROJ-1 main >/dev/null
+  [[ -d "$HOME/wts/app/fix/proj-1" ]] || return 0
+  local out; out="$(wt create app fix proj-1 2>&1)"
+  assert_contains "$out" "checked out: fix/PROJ-1"
+  assert_contains "$out" "not on its ticket branch fix/proj-1"
 }
 
 run_tests

@@ -1,24 +1,16 @@
-# _wt_worktree_is_registered <repo_path> <target>: true if <target> is registered as a
-# worktree of <repo_path> in `git worktree list`. Scoping the check to $repo_path (rather
-# than e.g. `git -C "$target" rev-parse --git-dir`) directly answers "is this a worktree of
-# THIS repo", which is what the reuse decision needs (R21). Both sides are canonicalized
-# with :A, matching the comparison convention already used in lib/resolve.zsh.
-#
-# The loop reads via process substitution rather than piping into the while (`cmd | while
-# ...; done`), and tracks the match in an explicit flag rather than the loop's own exit
-# status: a pipe's while runs in a subshell, and `git worktree list --porcelain` always ends
-# each entry (and the whole listing) with non-matching lines (HEAD/branch/blank) that fall
-# through to `continue` -- and `continue` resets $? to 0, so the seemingly-natural "trust the
-# loop's exit status" version reports a match even when none occurred.
-_wt_worktree_is_registered() {
-  local repo_path="$1" target="$2" want line wtpath
+# _wt_registered_branch <repo_path> <target>: rc 0 when <target> is registered as a worktree of
+# <repo_path>, even if its directory is gone; REPLY = the branch it has checked out, empty when
+# detached.
+_wt_registered_branch() {
+  local want="${2:A}" line wt
   local -i found=0
-  want="${target:A}"
+  REPLY=""
   while IFS= read -r line; do
-    [[ "$line" == worktree\ * ]] || continue
-    wtpath="${line#worktree }"
-    [[ "${wtpath:A}" == "$want" ]] && { found=1; break; }
-  done < <(git -C "$repo_path" worktree list --porcelain 2>/dev/null)
+    case "$line" in
+      "worktree "*) (( found )) && break; wt="${line#worktree }"; [[ "${wt:A}" == "$want" ]] && found=1 ;;
+      "branch refs/heads/"*) (( found )) && REPLY="${line#branch refs/heads/}" ;;
+    esac
+  done < <(git -C "$1" worktree list --porcelain 2>/dev/null)
   (( found ))
 }
 
@@ -102,36 +94,40 @@ _create_failed() {
   die "failed to create worktree"
 }
 
-# create_do <project> <repo> <repo_path> <kind> <ticket> <base_ref> [base_label]
-# Prints the summary, adds the worktree, and prints the path as the LAST line. base_ref is
-# the raw ref handed to git; base_label is the human-facing display text (may carry the
-# "(auto-detected)" suffix) -- kept apart so a ref is never reconstructed by splitting a
+# create_do <project> <repo> <repo_path> <kind> <ticket> <source> <base_ref> [base_label]
+# <source> is cmd_create's resolution: reuse|local|remote|new. Prints the path as the LAST line.
+# base_ref is the raw ref handed to git; base_label is the human-facing display text (may carry
+# the "(auto-detected)" suffix) -- kept apart so a ref is never reconstructed by splitting a
 # label string (R22).
 create_do() {
-  local project="$1" repo="$2" repo_path="$3" kind="$4" ticket="$5" base_ref="$6" base_label="${7:-$6}"
+  local project="$1" repo="$2" repo_path="$3" kind="$4" ticket="$5" source="$6" base_ref="$7" base_label="${8:-$7}"
   local target branch
   target="$(worktree_path "$project" "$repo" "$kind" "$ticket")"
   branch="$(wt_branch_name "$kind" "$ticket")"
   info "source repo: $repo_path"
   info "target path: $target"
   info "branch name: $branch"
-  if [[ -e "$target" ]]; then
-    if _wt_worktree_is_registered "$repo_path" "$target"; then
-      info "base ref: n/a (existing worktree)"
-      success "result: reused"; print -r -- "$target"; return 0
-    fi
-    die "target path exists but is not a worktree of $repo_path: $target (remove it, or run 'workytree prune' once available)"
+  if [[ "$source" == reuse ]]; then
+    _wt_registered_branch "$repo_path" "$target"
+    info "checked out: ${REPLY:-(detached HEAD)}"
+    [[ "$REPLY" == "$branch" ]] || warn "the worktree is not on its ticket branch $branch"
+    info "base ref: n/a (existing worktree)"
+    success "result: reused"; print -r -- "$target"; return 0
   fi
   local made="" d="${target:h}"
   while [[ ! -e "$d" ]]; do made="$d"; d="${d:h}"; done
   mkdir -p "${target:h}" || die "failed to create parent directory for $target"
-  if git -C "$repo_path" show-ref --verify --quiet "refs/heads/$branch"; then
-    info "base ref: n/a (existing branch)"
-    git -C "$repo_path" worktree add "$target" "$branch" || _create_failed "${target:h}" "$made"
-  else
-    info "base ref: $base_label"
-    git -C "$repo_path" worktree add --no-track -b "$branch" "$target" "$base_ref" || _create_failed "${target:h}" "$made"
-  fi
+  case "$source" in
+    local)
+      info "base ref: n/a (existing branch)"
+      git -C "$repo_path" worktree add "$target" "$branch" || _create_failed "${target:h}" "$made" ;;
+    remote)
+      info "base ref: n/a (existing remote branch origin/$branch)"
+      git -C "$repo_path" worktree add --track -b "$branch" "$target" "origin/$branch" || _create_failed "${target:h}" "$made" ;;
+    *)
+      info "base ref: $base_label"
+      git -C "$repo_path" worktree add --no-track -b "$branch" "$target" "$base_ref" || _create_failed "${target:h}" "$made" ;;
+  esac
   success "result: created"
   print -r -- "$target"
 }
@@ -196,40 +192,59 @@ cmd_create() {
     error "invalid base: $base"; hint "a base is a branch, tag or commit; none starts with '-'"; exit 2
   fi
 
-  local target branch
+  local target branch source=new
   target="$(worktree_path "$project" "$repo" "$kind" "$ticket")"
   branch="$(wt_branch_name "$kind" "$ticket")"
-  [[ -e "$target" ]] || wt_fetch_origin "$repo_path"
-  # base_ref/base_label split: see the note on create_do (R22).
-  local base_ref="$base" base_label="$base"
-  if [[ ! -e "$target" ]] && ! git -C "$repo_path" show-ref --verify --quiet "refs/heads/$branch"; then
-    if [[ -n "$base_ref" ]]; then
-      _create_base_ok "$repo_path" "$base_ref" || exit 1
-    else
-      local auto; auto="$(default_base_ref "$repo_path")" || exit $?
-      base_ref="$auto"
-      if prompt_available; then
-        while true; do
-          prompt_input "base branch" "$auto"; base_ref="$REPLY"
-          _create_base_ok "$repo_path" "$base_ref" && break
-        done
-      fi
-      base_label="$base_ref"
-      [[ "$base_ref" == "$auto" ]] && base_label="$auto (auto-detected)"
-    fi
-  elif [[ ! -e "$target" ]] && _create_checked_out_at "$repo_path" "$branch"; then
-    die_with_hints "$branch is already checked out at $REPLY" \
-      "work there instead: cd $REPLY" \
-      "or free the branch first: git -C $REPLY switch <another branch>"
+  if _wt_registered_branch "$repo_path" "$target"; then
+    [[ -e "$target" ]] || die_with_hints "a worktree is still registered at $target, but its directory is gone" \
+      "clean up git's record, then retry: workytree prune $repo"
+    source=reuse
+  elif [[ -e "$target" ]]; then
+    local stale_hint="move or delete it, then retry"
+    [[ -d "$target" ]] && dir_is_cruft_only "$target" && stale_hint="it holds only IDE/OS files; remove it with: workytree prune $repo"
+    die_with_hints "target path already exists and is not a worktree: $target" "$stale_hint"
+  else
+    wt_fetch_origin "$repo_path"
+    if git -C "$repo_path" show-ref --verify --quiet "refs/heads/$branch"; then source=local
+    elif git -C "$repo_path" show-ref --verify --quiet "refs/remotes/origin/$branch"; then source=remote; fi
   fi
+  # base_ref/base_label split: see the note on create_do (R22).
+  local base_ref="$base" base_label="$base" plan
+  case "$source" in
+    local)
+      _create_checked_out_at "$repo_path" "$branch" && die_with_hints "$branch is already checked out at $REPLY" \
+        "work there instead: cd $REPLY" \
+        "or free the branch first: git -C $REPLY switch <another branch>"
+      [[ -n "$base" ]] && warn "base $base ignored: branch $branch already exists"
+      plan="existing branch${base:+; base ignored}" ;;
+    remote)
+      [[ -n "$base" ]] && warn "base $base ignored: branch $branch already exists on origin"
+      plan="existing remote branch origin/$branch" ;;
+    new)
+      if [[ -n "$base_ref" ]]; then
+        _create_base_ok "$repo_path" "$base_ref" || exit 1
+      else
+        local auto; auto="$(default_base_ref "$repo_path")" || exit $?
+        base_ref="$auto"
+        if prompt_available; then
+          while true; do
+            prompt_input "base branch" "$auto"; base_ref="$REPLY"
+            _create_base_ok "$repo_path" "$base_ref" && break
+          done
+        fi
+        base_label="$base_ref"
+        [[ "$base_ref" == "$auto" ]] && base_label="$auto (auto-detected)"
+      fi
+      plan="base: $base_label" ;;
+  esac
 
-  if prompt_available && [[ ! -e "$target" ]]; then
+  if prompt_available && [[ "$source" != reuse ]]; then
     dim "──────────────────────────────" >&2
     print -u2 -r -- "repo:    $repo → $repo_path"
     print -u2 -r -- "target:  $target"
-    print -u2 -r -- "branch:  $branch${base_label:+  (base: $base_label)}"
+    print -u2 -r -- "branch:  $branch  ($plan)"
     prompt_confirm "Create?" y || exit 130
   fi
-  create_do "$project" "$repo" "$repo_path" "$kind" "$ticket" "$base_ref" "$base_label"
+  create_do "$project" "$repo" "$repo_path" "$kind" "$ticket" "$source" "$base_ref" "$base_label"
   ai_maybe_offer "$project" "$want_ai"
 }
