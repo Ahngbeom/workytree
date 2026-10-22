@@ -196,4 +196,25 @@ test_detached_head_branch_flag_deletes_the_ticket_branch() {
   assert_eq "$(git -C "$HOME/src/app" branch --list fix/T)" ""
 }
 
+test_branch_delete_prints_a_restore_command() {
+  fixture
+  print y > "$WT/f"; git -C "$WT" add -A; git -C "$WT" commit -qm c
+  local sha short out
+  sha="$(git -C "$WT" rev-parse HEAD)" short="$(git -C "$WT" rev-parse --short HEAD)"
+  out="$(wt remove app fix T -B 2>&1)"
+  assert_contains "$out" "deleted branch fix/T (was $short)"
+  assert_contains "$out" "local branch   deleted       fix/T (was $short)"
+  assert_contains "$out" "restore it with: git -C $HOME/src/app branch fix/T $short"
+  git -C "$HOME/src/app" branch fix/T "$short"
+  assert_eq "$(git -C "$HOME/src/app" rev-parse fix/T)" "$sha" "restored at the old tip"
+}
+
+test_unmerged_branch_hint_is_runnable() {
+  fixture
+  print y > "$WT/f"; git -C "$WT" add -A; git -C "$WT" commit -qm c
+  local out; out="$(wt remove app fix T -b 2>&1)"
+  assert_contains "$out" "force-delete it with: git -C $HOME/src/app branch -D fix/T"
+  assert_eq "${out//re-run remove/}" "$out" "no hint that needs the removed worktree"
+}
+
 run_tests

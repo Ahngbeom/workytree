@@ -1,16 +1,20 @@
 # remove_branch <repo_path> <branch> <force>: best-effort branch delete after the worktree
-# using it is already gone. The branch name must be captured by the caller BEFORE removing
-# the worktree — `git branch --show-current` needs the worktree to still exist.
+# using it is already gone. REPLY = the short sha the branch pointed at.
 remove_branch() {
   local repo_path="$1" branch="$2" force="$3" flag='-d' out
   (( force )) && flag='-D'
-  if out="$(git -C "$repo_path" branch "$flag" "$branch" 2>&1)"; then success "deleted branch: $branch"; return 0; fi
+  REPLY="$(git -C "$repo_path" rev-parse --short "refs/heads/$branch" 2>/dev/null)"
+  if out="$(git -C "$repo_path" branch "$flag" "$branch" 2>&1)"; then
+    success "deleted branch $branch (was $REPLY)"
+    hint "restore it with: git -C $repo_path branch $branch $REPLY"
+    return 0
+  fi
   if (( force )); then
     warn "failed to delete branch: $branch. git said:"; _wt_indent_and_cap "$out" >&2
     hint "inspect it with: git -C $repo_path branch -vv --list $branch"
   else
     warn "branch not deleted (likely unmerged): $branch"
-    hint "re-run remove with --branch-force (-B) to force-delete it"
+    hint "force-delete it with: git -C $repo_path branch -D $branch"
   fi
   return 1
 }
@@ -37,10 +41,15 @@ _wt_remote_branch() {
   return 1
 }
 
+# remove_remote_branch <repo_path> <remote> <remote_branch>: REPLY = the short sha the
+# tracking ref pointed at before the delete.
 remove_remote_branch() {
   local repo_path="$1" remote="$2" rbranch="$3" out
+  REPLY="$(git -C "$repo_path" rev-parse --short "refs/remotes/$remote/$rbranch" 2>/dev/null)"
   if out="$(git -C "$repo_path" push "$remote" --delete "$rbranch" 2>&1)"; then
-    success "deleted remote branch: $remote/$rbranch"; return 0
+    success "deleted remote branch $remote/$rbranch (was $REPLY)"
+    hint "restore it with: git -C $repo_path push $remote ${REPLY}:refs/heads/$rbranch"
+    return 0
   fi
   warn "failed to delete remote branch: $remote/$rbranch. git said:"; _wt_indent_and_cap "$out" >&2
   hint "if it is already gone upstream, drop the stale ref: git -C $repo_path fetch --prune $remote"
@@ -359,7 +368,7 @@ cmd_remove() {
 
   if (( delete_branch )); then
     ui_progress $(( ++step )) $total "deleting local branch $branch"
-    if remove_branch "$repo_path" "$branch" $(( force_branch || verified )); then results+=("ok"$'\t'"local branch   deleted       $branch")
+    if remove_branch "$repo_path" "$branch" $(( force_branch || verified )); then results+=("ok"$'\t'"local branch   deleted       $branch (was $REPLY)")
     else results+=("fail"$'\t'"local branch   not deleted   $branch"); fi
   elif [[ -n "$branch_row" ]]; then
     results+=("$branch_row")
@@ -368,7 +377,7 @@ cmd_remove() {
   fi
   if (( delete_remote )); then
     ui_progress $(( ++step )) $total "deleting remote branch $remote/$rbranch"
-    if remove_remote_branch "$repo_path" "$remote" "$rbranch"; then results+=("ok"$'\t'"remote branch  deleted       $remote/$rbranch")
+    if remove_remote_branch "$repo_path" "$remote" "$rbranch"; then results+=("ok"$'\t'"remote branch  deleted       $remote/$rbranch (was $REPLY)")
     else results+=("fail"$'\t'"remote branch  not deleted   $remote/$rbranch"); fi
   elif [[ -n "$remote" ]]; then
     results+=("skip"$'\t'"remote branch  kept          $remote/$rbranch")

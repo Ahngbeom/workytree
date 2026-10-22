@@ -366,4 +366,14 @@ test_questions_name_the_ticket_branch_when_another_is_checked_out() {
   assert_contains "$(local_branch spike)" spike
 }
 
+test_remote_delete_prints_a_restore_command() {
+  fixture
+  local short out; short="$(git -C "$WT" rev-parse --short HEAD)"
+  out="$(wt remove app fix T -r 2>&1)"
+  assert_contains "$out" "deleted remote branch origin/fix/T (was $short)"
+  assert_contains "$out" "restore it with: git -C $HOME/src/app push origin ${short}:refs/heads/fix/T"
+  git -C "$HOME/src/app" push -q origin "${short}:refs/heads/fix/T"
+  assert_contains "$(remote_branch fix/T)" fix/T "restored"
+}
+
 run_tests
