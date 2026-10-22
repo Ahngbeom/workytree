@@ -3,7 +3,6 @@
 # the worktree — `git branch --show-current` needs the worktree to still exist.
 remove_branch() {
   local repo_path="$1" branch="$2" force="$3" flag='-d' out
-  [[ -n "$branch" ]] || { warn "no branch to delete (detached HEAD); skipping"; return 1; }
   (( force )) && flag='-D'
   if out="$(git -C "$repo_path" branch "$flag" "$branch" 2>&1)"; then success "deleted branch: $branch"; return 0; fi
   if (( force )); then
@@ -186,7 +185,7 @@ cmd_remove() {
     _rm_pick_worktree "$repo" "$kind"   # sets repo kind ticket, and WT_PROJECT_OPT
   fi
 
-  local r project repo_path target branch
+  local r project repo_path target branch=""
   r="$(resolve_repo "$repo")" || exit $?
   project="${r%%$'\t'*}" repo_path="${r#*$'\t'}"
   target="$(worktree_path "$project" "$repo" "$kind" "$ticket")"
@@ -198,13 +197,24 @@ cmd_remove() {
     [[ -d "$dest" ]] || die_with_hints "--to: not a directory: $dest" "pass an existing directory, e.g. --to $repo_path"
     _rm_is_inside "$dest" "$target" && die_with_hints "--to: inside the worktree being removed: $dest" "pass a directory outside $target"
   fi
-  # Capture the branch name before the worktree is removed — afterwards there is nothing
-  # left at $target to ask git about.
-  branch="$(git -C "$target" branch --show-current 2>/dev/null || true)"
+  # Read before the worktree is removed: afterwards there is nothing at $target to ask git about.
+  local ticket_branch other branch_desc
+  ticket_branch="$(wt_branch_name "$kind" "$ticket")"
+  other="$(git -C "$target" branch --show-current 2>/dev/null || true)"
+  [[ "$other" == "$ticket_branch" ]] && other=""
+  git -C "$repo_path" show-ref --verify --quiet "refs/heads/$ticket_branch" && branch="$ticket_branch"
+  branch_desc="$ticket_branch"
+  [[ -z "$branch" ]] && branch_desc+=" (does not exist)"
+  [[ -n "$other" ]] && branch_desc+=" (checked out: $other)"
   local -i interactive=0
   prompt_available && interactive=1
+  if [[ -n "$other" ]] && (( ! interactive && (delete_branch || delete_remote) )); then
+    die_with_hints "'$other' is checked out, not its ticket branch '$ticket_branch'; refusing to guess which branch -b/-B/-r mean" \
+      "remove the worktree and keep both branches: workytree remove $repo $kind $ticket" \
+      "then delete the one you mean: git -C $repo_path branch -D <branch>"
+  fi
 
-  info "removing worktree"; print -r -- "  path: $target"; [[ -n "$branch" ]] && print -r -- "  branch: $branch"
+  info "removing worktree"; print -r -- "  path: $target"; print -r -- "  branch: $branch_desc"
   git -C "$target" status --short --branch | sed 's/^/  /'
 
   # A single probe decides everything below (_worktree_dirt_kind). Calling it twice under two
@@ -277,7 +287,7 @@ cmd_remove() {
   if (( interactive )) && [[ -n "$branch" ]]; then
     if (( ! delete_branch )); then
       local def=n; [[ "$verdict" == merged ]] && def=y
-      prompt_confirm "delete local branch '$branch'? ($label)" $def && delete_branch=1
+      prompt_confirm "delete local branch '$branch'? ($label${other:+; checked out: $other})" $def && delete_branch=1
     fi
     if (( delete_branch && ! force_branch )) && [[ "$verdict" == unmerged ]]; then
       if prompt_confirm "'$branch' has unmerged commits that would be lost — force-delete it?" n; then force_branch=1
@@ -302,8 +312,12 @@ cmd_remove() {
       branch_row="fail"$'\t'"local branch   kept          $branch (not merged into $base_name; use -B)"
     fi
   fi
+  if (( delete_branch )) && [[ -z "$branch" ]]; then
+    warn "no local branch $ticket_branch; nothing to delete"
+    delete_branch=0
+  fi
   if (( delete_remote )) && [[ -z "$remote" ]]; then
-    warn "no remote branch known for '${branch:-(detached HEAD)}'; skipping remote delete"
+    warn "no remote branch known for '$ticket_branch'; skipping remote delete"
     hint "if it exists upstream, refresh tracking refs first: git -C $repo_path fetch --all"
     delete_remote=0
   fi
@@ -317,7 +331,7 @@ cmd_remove() {
     (( delete_remote )) && remote_plan="delete"
     ui_rule plan
     printf '  %-14s %-14s %s\n' "worktree" "remove$( (( force_remove )) && print -n ' (force)')" "$target" \
-      "local branch" "$branch_plan" "${branch:-(detached HEAD)}" \
+      "local branch" "$branch_plan" "$branch_desc" \
       "remote branch" "$remote_plan" "${remote:+$remote/$rbranch}"
     [[ -n "$dest" ]] && printf '  %-14s %s\n' "then move to" "$dest"
     prompt_confirm "Proceed?" y || exit 130
@@ -346,11 +360,11 @@ cmd_remove() {
   if (( delete_branch )); then
     ui_progress $(( ++step )) $total "deleting local branch $branch"
     if remove_branch "$repo_path" "$branch" $(( force_branch || verified )); then results+=("ok"$'\t'"local branch   deleted       $branch")
-    else results+=("fail"$'\t'"local branch   not deleted   ${branch:-(detached HEAD)}"); fi
+    else results+=("fail"$'\t'"local branch   not deleted   $branch"); fi
   elif [[ -n "$branch_row" ]]; then
     results+=("$branch_row")
   else
-    results+=("skip"$'\t'"local branch   kept          ${branch:-(detached HEAD)}")
+    results+=("skip"$'\t'"local branch   kept          $branch_desc")
   fi
   if (( delete_remote )); then
     ui_progress $(( ++step )) $total "deleting remote branch $remote/$rbranch"

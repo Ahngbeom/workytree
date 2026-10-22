@@ -307,6 +307,8 @@ infer_current_repo() {
 
 worktree_parent() { local p="$1" repo="$2" kind="${3:-}"; print -r -- "$(project_worktree_root "$p")/$repo${kind:+/$kind}"; }
 worktree_path()   { print -r -- "$(project_worktree_root "$1")/$2/$3/$4"; }
+# wt_branch_name <kind> <ticket>: the worktree's ticket branch.
+wt_branch_name()  { print -r -- "$1/$2"; }
 
 default_base_ref() {
   local repo_path="$1" upstream current

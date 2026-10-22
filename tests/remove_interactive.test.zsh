@@ -355,4 +355,15 @@ test_picker_finds_ticket_with_slash() {
   assert_eq "${out//T\/sub/}" "$out" "never descends into a worktree"
 }
 
+test_questions_name_the_ticket_branch_when_another_is_checked_out() {
+  fixture; git -C "$WT" switch -q -c spike
+  answers "y" "n" ""            # local fix/T: yes, remote origin/fix/T: no, proceed
+  local out; out="$(wt remove app fix T 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$out" "delete local branch 'fix/T'?"
+  assert_contains "$out" "checked out: spike"
+  assert_eq "$(local_branch fix/T)" ""
+  assert_contains "$(local_branch spike)" spike
+}
+
 run_tests

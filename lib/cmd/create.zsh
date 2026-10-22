@@ -22,12 +22,6 @@ _wt_worktree_is_registered() {
   (( found ))
 }
 
-# wt_branch_name <kind> <ticket>: the one place "$kind/$ticket" is joined into a branch name.
-# Coherence cleanup: this used to be reconstructed independently in three spots below (the
-# show-ref probe, the confirmation summary, and create_do's own copy) -- three separate copies
-# of the same join that could silently drift apart. Every caller now routes through here.
-wt_branch_name() { print -r -- "$1/$2"; }
-
 # create_pick_repo: interactive project -> repo selection. Sets project, repo, repo_path in
 # the CALLER's scope (cmd_create's locals) -- deliberately not `local` here.
 #

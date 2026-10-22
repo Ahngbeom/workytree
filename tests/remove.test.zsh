@@ -163,4 +163,26 @@ test_remove_dashdash_ends_options() {
   assert_not_exists "$WT"
 }
 
+test_branch_flags_refuse_when_another_branch_is_checked_out() {
+  fixture
+  git -C "$WT" switch -q -c spike
+  print s > "$WT/s"; git -C "$WT" add -A; git -C "$WT" commit -qm spike
+  local out; out="$(wt remove app fix T -B 2>&1)"
+  assert_eq "$?" 1
+  assert_contains "$out" "'spike' is checked out, not its ticket branch 'fix/T'"
+  assert_dir "$WT"
+  assert_contains "$(git -C "$HOME/src/app" branch --list spike)" spike "spike kept"
+  assert_exit 1 wt remove app fix T -b
+  assert_exit 0 wt remove app fix T
+  assert_contains "$(git -C "$HOME/src/app" branch --list spike fix/T)" spike "plain remove keeps every branch"
+}
+
+test_detached_head_branch_flag_deletes_the_ticket_branch() {
+  fixture
+  git -C "$WT" switch -q --detach
+  local out; out="$(wt remove app fix T -b 2>&1)"
+  assert_eq "$?" 0
+  assert_eq "$(git -C "$HOME/src/app" branch --list fix/T)" ""
+}
+
 run_tests
