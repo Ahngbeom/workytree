@@ -279,17 +279,65 @@ test_gone_upstream_with_remote_flag_skips_push() {
   assert_eq "${out//failed to delete remote branch/}" "$out" "no doomed push"
 }
 
-# `git branch -d` judges "merged" against the upstream when one exists: a branch fully pushed
-# to its upstream but not merged into the repo's HEAD is deletable without force.
-test_branch_published_to_upstream_counts_as_merged() {
-  fixture
-  print y > "$WT/f"; git -C "$WT" add -A; git -C "$WT" commit -qm c
+# commit_in_wt <name>: one commit in the worktree; prints its sha.
+commit_in_wt() { print "$1" > "$WT/$1"; git -C "$WT" add -A; git -C "$WT" commit -qm "$1"; git -C "$WT" rev-parse HEAD; }
+
+test_pushed_only_branch_is_not_called_merged() {
+  fixture; commit_in_wt C >/dev/null
   git -C "$WT" push -q -u origin fix/T 2>/dev/null
-  answers "" "n" ""
+  answers "" "n" ""             # local: default, remote: no, proceed
   local out; out="$(wt remove app fix T 2>&1)"
-  assert_contains "$out" "(merged)"
-  assert_eq "${out//unmerged/}" "$out" "no force prompt"
+  assert_contains "$out" "delete local branch 'fix/T'? (pushed, not merged into origin/main)"
+  assert_contains "$(local_branch fix/T)" "fix/T" "default is No"
+}
+
+test_branch_and_remote_flags_keep_a_branch_not_merged_into_base() {
+  fixture; local sha; sha="$(commit_in_wt C)"
+  git -C "$WT" push -q -u origin fix/T 2>/dev/null
+  local out; out="$(wt remove app fix T -b -r 2>&1)"
+  assert_eq "$?" 0
+  assert_eq "$(remote_branch fix/T)" "" "remote branch deleted"
+  assert_contains "$(local_branch fix/T)" "fix/T" "local branch kept"
+  assert_contains "$out" "not merged into origin/main; use -B"
+  assert_contains "$(git -C "$HOME/src/app" rev-list --all)" "$sha" "commit still reachable"
+}
+
+test_pushed_branch_asks_before_deleting_both_copies() {
+  fixture; local sha; sha="$(commit_in_wt C)"
+  git -C "$WT" push -q -u origin fix/T 2>/dev/null
+  answers "y" "y" "" ""         # local: yes, remote: yes, delete both anyway: default, proceed
+  local out; out="$(wt remove app fix T 2>&1)"
+  assert_contains "$out" "its remote branch is being deleted too"
+  assert_contains "$(local_branch fix/T)" "fix/T" "default keeps the local branch"
+  assert_eq "$(remote_branch fix/T)" "" "remote branch deleted"
+}
+
+# merged_and_gone_fixture: someone merged fix/T into origin/main and deleted its remote branch;
+# the local main checkout never pulled.
+merged_and_gone_fixture() {
+  fixture; commit_in_wt G >/dev/null
+  git -C "$WT" push -q -u origin fix/T 2>/dev/null
+  git clone -q "$HOME/remote.git" "$HOME/other"
+  git -C "$HOME/other" merge -q --no-ff -m "Merge PR" origin/fix/T
+  git -C "$HOME/other" push -q origin main
+  git -C "$HOME/other" push -q origin --delete fix/T
+  git -C "$HOME/src/app" fetch -q --prune origin
+}
+
+test_branch_merged_into_origin_after_its_remote_was_deleted_is_merged() {
+  merged_and_gone_fixture
+  answers "" ""                 # local: default, proceed
+  local out; out="$(wt remove app fix T 2>&1)"
+  assert_contains "$out" "delete local branch 'fix/T'? (merged into origin/main)"
+  assert_eq "${out//unmerged/}" "$out" "no force question"
   assert_eq "$(local_branch fix/T)" ""
+}
+
+test_branch_flag_deletes_a_branch_merged_into_origin_without_force() {
+  merged_and_gone_fixture
+  local out; out="$(wt remove app fix T -b 2>&1)"
+  assert_eq "$?" 0
+  assert_eq "$(local_branch fix/T)" "" "deleted although local main is stale"
 }
 
 # create accepts a ticket containing "/", nesting the worktree one level deeper.

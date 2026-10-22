@@ -259,30 +259,47 @@ cmd_remove() {
   fi
 
   local remote="" rbranch=""
-  if [[ -n "$branch" ]] && (( interactive || delete_remote )); then
+  if [[ -n "$branch" ]] && (( interactive || delete_remote || (delete_branch && ! force_branch) )); then
     wt_fetch_origin "$repo_path"
     _wt_remote_branch "$repo_path" "$branch" && { remote="${reply[1]}" rbranch="${reply[2]}"; }
   fi
-  local -i merged=0
-  local merged_into=HEAD up_ref
-  if [[ -n "$branch" ]]; then
-    # The reference `git branch -d` checks: the upstream when it exists, else HEAD.
-    up_ref="$(git -C "$repo_path" for-each-ref --format='%(upstream)' "refs/heads/$branch" 2>/dev/null)"
-    [[ -n "$up_ref" ]] && git -C "$repo_path" show-ref --verify --quiet "$up_ref" && merged_into="$up_ref"
-    git -C "$repo_path" merge-base --is-ancestor "refs/heads/$branch" "$merged_into" 2>/dev/null && merged=1
+  local verdict="" base_name="" label=""
+  if [[ -n "$branch" ]] && (( interactive || (delete_branch && ! force_branch) )); then
+    branch_verdict "$repo_path" "$branch"; verdict="$REPLY"
+    base_name="${WT_VERDICT_BASE:-the base branch}"
+    case "$verdict" in
+      merged) label="merged into $base_name"; [[ -n "$WT_VERDICT_PR" ]] && label="PR $WT_VERDICT_PR merged" ;;
+      pushed) label="pushed, not merged into $base_name" ;;
+      *)      label="not merged into $base_name"; (( WT_VERDICT_GONE )) && label+="; its upstream was deleted" ;;
+    esac
   fi
 
   if (( interactive )) && [[ -n "$branch" ]]; then
     if (( ! delete_branch )); then
-      if (( merged )); then prompt_confirm "delete local branch '$branch'? (merged)" y && delete_branch=1
-      else prompt_confirm "delete local branch '$branch'? (not merged)" n && delete_branch=1; fi
+      local def=n; [[ "$verdict" == merged ]] && def=y
+      prompt_confirm "delete local branch '$branch'? ($label)" $def && delete_branch=1
     fi
-    if (( delete_branch && ! force_branch && ! merged )); then
+    if (( delete_branch && ! force_branch )) && [[ "$verdict" == unmerged ]]; then
       if prompt_confirm "'$branch' has unmerged commits that would be lost — force-delete it?" n; then force_branch=1
       else delete_branch=0; fi
     fi
     if (( ! delete_remote )) && [[ -n "$remote" ]]; then
       prompt_confirm "delete remote branch '$remote/$rbranch' too? (pushes a delete to $remote)" n && delete_remote=1
+    fi
+    if (( delete_branch && delete_remote && ! force_branch )) && [[ "$verdict" == pushed ]]; then
+      if prompt_confirm "'$branch' is not merged into $base_name and its remote branch is being deleted too — force-delete the local branch and lose its commits?" n; then force_branch=1
+      else delete_branch=0; fi
+    fi
+  fi
+  local -i verified=0
+  local branch_row=""
+  if (( delete_branch && ! force_branch )); then
+    if [[ "$verdict" == merged ]]; then verified=1
+    elif (( delete_remote )); then
+      delete_branch=0
+      warn "keeping local branch $branch: it is not merged into $base_name and its remote branch is being deleted"
+      hint "to delete it anyway, and lose its commits: git -C $repo_path branch -D $branch"
+      branch_row="fail"$'\t'"local branch   kept          $branch (not merged into $base_name; use -B)"
     fi
   fi
   if (( delete_remote )) && [[ -z "$remote" ]]; then
@@ -328,8 +345,10 @@ cmd_remove() {
 
   if (( delete_branch )); then
     ui_progress $(( ++step )) $total "deleting local branch $branch"
-    if remove_branch "$repo_path" "$branch" "$force_branch"; then results+=("ok"$'\t'"local branch   deleted       $branch")
+    if remove_branch "$repo_path" "$branch" $(( force_branch || verified )); then results+=("ok"$'\t'"local branch   deleted       $branch")
     else results+=("fail"$'\t'"local branch   not deleted   ${branch:-(detached HEAD)}"); fi
+  elif [[ -n "$branch_row" ]]; then
+    results+=("$branch_row")
   else
     results+=("skip"$'\t'"local branch   kept          ${branch:-(detached HEAD)}")
   fi

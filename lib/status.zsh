@@ -58,6 +58,44 @@ status_base_ref() {
   return 1
 }
 
+# status_merged_rule <in_base 0|1> <pr_state> <pr_sha> <tip>: rc 0 when the branch's tip is in
+# the base branch, or its PR/MR was merged at exactly this tip.
+status_merged_rule() { (( $1 )) || [[ "$2" == merged && -n "$3" && "$3" == "$4" ]]; }
+
+# branch_verdict <repo_path> <branch>: REPLY = merged (status_merged_rule), pushed (every commit
+# is on its remote upstream) or unmerged; WT_VERDICT_BASE = the base as shown (origin/main),
+# WT_VERDICT_PR = the merged PR (#N) when only the forge shows the merge, WT_VERDICT_GONE = 0|1.
+typeset -g WT_VERDICT_BASE='' WT_VERDICT_PR=''
+typeset -gi WT_VERDICT_GONE=0
+branch_verdict() {
+  local repo_path="$1" br="$2" base tip up line
+  local -i in_base=0
+  local -a pr
+  WT_VERDICT_BASE='' WT_VERDICT_PR='' WT_VERDICT_GONE=0 REPLY=unmerged
+  tip="$(git -C "$repo_path" rev-parse -q --verify "refs/heads/$br^{commit}")" || return 1
+  if base="$(status_base_ref "$repo_path")"; then
+    WT_VERDICT_BASE="${${base#refs/remotes/}#refs/heads/}"
+    git -C "$repo_path" merge-base --is-ancestor "$tip" "$base" 2>/dev/null && in_base=1
+  fi
+  if (( ! in_base )); then
+    for line in ${(f)"$(forge_pr_rows "$repo_path" 2>/dev/null)"}; do
+      [[ "${line%%$'\t'*}" == "$br" ]] && { pr=("${(@ps:\t:)line}"); break; }
+    done
+  fi
+  if status_merged_rule $in_base "${pr[3]:-}" "${pr[5]:-}" "$tip"; then
+    (( in_base )) || WT_VERDICT_PR="${pr[2]}"
+    REPLY=merged; return 0
+  fi
+  up="$(git -C "$repo_path" for-each-ref --format='%(upstream)' "refs/heads/$br" 2>/dev/null)"
+  [[ "$up" == refs/remotes/* ]] || return 0
+  if git -C "$repo_path" show-ref --verify --quiet "$up"; then
+    git -C "$repo_path" merge-base --is-ancestor "$tip" "$up" 2>/dev/null && REPLY=pushed
+  else
+    WT_VERDICT_GONE=1
+  fi
+  return 0
+}
+
 # status_flag <merged> <gone> <pr_state> <dirty> <ahead> <has_upstream> <base_ahead>
 #             <locked> <age_s> <stale_s>
 # REPLY = dirty|safe|stale|-. Losing work outranks everything, so dirty wins over safe and stale.
@@ -132,7 +170,7 @@ _status_branch_fields() {
     if [[ "${b_track[$br]}" == gone ]]; then gone=1
     else _status_track "${b_track[$br]}"; ahead=${reply[1]} behind=${reply[2]}; fi
   fi
-  (( ${+b_merged[$br]} )) && merged=1
+  status_merged_rule $(( ${+b_merged[$br]} )) "${pr_state[$br]:-}" "${pr_sha[$br]:-}" "${b_tip[$br]:-}" && merged=1
   if [[ -n "${b_ab[$br]:-}" ]]; then
     bahead=${b_ab[$br]%% *} bbehind=${b_ab[$br]##* }
   elif [[ "$base" != - ]]; then
