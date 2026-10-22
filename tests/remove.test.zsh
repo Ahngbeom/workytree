@@ -177,6 +177,17 @@ test_branch_flags_refuse_when_another_branch_is_checked_out() {
   assert_contains "$(git -C "$HOME/src/app" branch --list spike fix/T)" spike "plain remove keeps every branch"
 }
 
+test_branch_and_remote_flags_warn_when_the_ticket_branch_is_missing() {
+  fixture
+  git -C "$WT" switch -q --detach
+  git -C "$HOME/src/app" branch -q -D fix/T
+  local out; out="$(wt remove app fix T -b -r 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$out" "no local branch fix/T; nothing to delete"
+  assert_eq "${out//keeping local branch/}" "$out" "no nameless keep warning"
+  assert_not_exists "$WT"
+}
+
 test_detached_head_branch_flag_deletes_the_ticket_branch() {
   fixture
   git -C "$WT" switch -q --detach

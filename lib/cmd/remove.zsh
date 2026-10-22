@@ -301,6 +301,10 @@ cmd_remove() {
       else delete_branch=0; fi
     fi
   fi
+  if (( delete_branch )) && [[ -z "$branch" ]]; then
+    warn "no local branch $ticket_branch; nothing to delete"
+    delete_branch=0
+  fi
   local -i verified=0
   local branch_row=""
   if (( delete_branch && ! force_branch )); then
@@ -311,10 +315,6 @@ cmd_remove() {
       hint "to delete it anyway, and lose its commits: git -C $repo_path branch -D $branch"
       branch_row="fail"$'\t'"local branch   kept          $branch (not merged into $base_name; use -B)"
     fi
-  fi
-  if (( delete_branch )) && [[ -z "$branch" ]]; then
-    warn "no local branch $ticket_branch; nothing to delete"
-    delete_branch=0
   fi
   if (( delete_remote )) && [[ -z "$remote" ]]; then
     warn "no remote branch known for '$ticket_branch'; skipping remote delete"
