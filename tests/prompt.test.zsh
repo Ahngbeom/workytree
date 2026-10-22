@@ -150,6 +150,10 @@ tty_widgets() {
   [[ -s $out ]] && print -r -- "$(<$out)"
 }
 
+test_typeahead_does_not_answer_the_next_prompt() {
+  assert_eq "$(tty_widgets '2\r' n)" "b 1 0" "the Enter typed with 2 is dropped; the confirm waits for n"
+}
+
 test_split_escape_sequence_is_still_an_arrow() {
   assert_eq "$(tty_widgets '\e|[B\r' y)" "b 0 0" "Esc, a pause, then [B is Down"
 }

@@ -376,4 +376,26 @@ test_remote_delete_prints_a_restore_command() {
   assert_contains "$(remote_branch fix/T)" fix/T "restored"
 }
 
+test_typed_ahead_keys_do_not_confirm_the_removal() {
+  make_repo "$HOME/src/app"
+  write_config <<EOF2
+[project me]
+repo_root = ~/src
+worktree_root = ~/wts
+EOF2
+  wt create app fix T main >/dev/null 2>&1
+  pty_start "WORKYTREE_PROMPT_INPUT=/dev/tty WORKYTREE_PROMPT_KEYS=1 ${(q)WT_BIN} remove; print -r -- \$? > ${(q)TMP_ROOT}/rc"
+  pty_wait "worktree to remove" 50
+  pty_send $'1\r2\r'
+  pty_wait "delete local branch" 50; sleep 0.5
+  assert_dir "$HOME/wts/app/fix/T" "nothing removed while the branch question waits"
+  pty_send n
+  pty_wait "Proceed?" 50; sleep 0.3
+  pty_send n
+  pty_finish 50
+  assert_eq "$(<$TMP_ROOT/rc)" 130
+  assert_dir "$HOME/wts/app/fix/T"
+  assert_contains "$(git -C "$HOME/src/app" branch --list fix/T)" fix/T
+}
+
 run_tests

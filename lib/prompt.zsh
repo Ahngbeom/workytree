@@ -108,6 +108,8 @@ _prompt_raw_on() {
   WT_PROMPT_STTY="$(stty -g <&$WT_PROMPT_FD)"
   # -isig: Ctrl-C arrives as a key, so the cancel path restores the terminal before exiting.
   stty -icanon -echo -isig <&$WT_PROMPT_FD
+  local junk
+  while read -u $WT_PROMPT_FD -t 0 -k 1 -r junk; do :; done
 }
 _prompt_raw_off() {
   [[ -n "$WT_PROMPT_STTY" ]] || return 0
