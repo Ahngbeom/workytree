@@ -162,4 +162,25 @@ test_create_last_stdout_line_is_still_the_path_after_fetch() {
   assert_eq "$(wt create app fix F -y 2>/dev/null | tail -1)" "$HOME/wts/app/fix/F"
 }
 
+test_create_rejects_unknown_flags_before_doing_anything() {
+  origin_fixture
+  local flag out
+  for flag in --force --dry-run --ia; do
+    out="$(wt create app fix X "$flag" -y 2>&1)"
+    assert_eq "$?" 2 "$flag"
+    assert_contains "$out" "unknown flag: $flag"
+    assert_eq "${out//fetching/}" "$out" "$flag: no fetch"
+  done
+  out="$(wt create app fix -T2 -y 2>&1)"
+  assert_eq "$?" 2 -T2
+  assert_contains "$out" "unknown flag: -T2"
+  assert_not_exists "$HOME/wts"
+}
+
+test_create_dashdash_still_passes_a_literal_dash_ticket() {
+  fixture
+  assert_exit 0 wt create -- app fix -T2 main
+  assert_eq "$(git -C "$HOME/wts/app/fix/-T2" branch --show-current)" "fix/-T2"
+}
+
 run_tests
