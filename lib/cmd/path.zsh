@@ -12,4 +12,9 @@ cmd_path() {
     *) usage_error "usage: workytree path [repo [kind [ticket]]]" ;;
   esac
 }
-cmd_cd() { cmd_path "$@"; }
+cmd_cd() {
+  local p
+  p="$(cmd_path "$@")" || exit $?
+  [[ -d "$p" ]] || die_with_hints "not found: $p" "list existing worktrees with: workytree list${1:+ $1}"
+  print -r -- "$p"
+}

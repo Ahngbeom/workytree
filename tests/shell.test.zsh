@@ -597,4 +597,12 @@ test_ctrl_c_after_the_cwd_was_deleted_lands_in_an_existing_directory() {
   assert_contains "$WT_PTY_OUT" "NOW=$HOME/wts/app/fix"
 }
 
+test_cd_to_a_missing_worktree_fails_and_stays_put() {
+  fixture
+  local out; out="$(zsh_i 'cd ~; wt cd app fix NOPE && touch m; print rc=$?; pwd')"
+  assert_contains "$out" "workytree: not found: $HOME/wts/app/fix/NOPE"
+  assert_contains "$out" "rc=1"$'\n'"$HOME"
+  assert_not_exists "$HOME/m"
+}
+
 run_tests

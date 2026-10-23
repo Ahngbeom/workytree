@@ -86,4 +86,23 @@ EOF
   chmod +x "$HOME/src/app/.git/hooks/post-checkout"
   assert_contains "$(WORKYTREE_SHELL=terminal WORKYTREE_AI_SKIP=stdin wt create app fix H main -y 2>&1)" "hook sees []"
 }
+
+test_cd_checks_its_target_and_path_does_not() {
+  make_repo "$HOME/src/app"
+  write_config <<'EOF'
+[project me]
+repo_root = ~/src
+worktree_root = ~/wts
+EOF
+  local out rc
+  out="$(wt cd app fix NOPE 2>&1)"; rc=$?
+  assert_eq "$rc" 1
+  assert_contains "$out" "workytree: not found: $HOME/wts/app/fix/NOPE"
+  assert_contains "$out" "hint: list existing worktrees with: workytree list app"
+  assert_exit 1 wt cd app fix
+  assert_eq "$(wt cd app)" "$HOME/src/app"
+  assert_eq "$(wt path app fix NOPE)" "$HOME/wts/app/fix/NOPE" "path stays compute-only"
+  assert_exit 0 wt path app fix NOPE
+}
+
 run_tests
