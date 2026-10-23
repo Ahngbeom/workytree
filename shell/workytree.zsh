@@ -9,7 +9,7 @@ typeset -g WORKYTREE_BIN="$WORKYTREE_ROOT/bin/workytree"
 # snapshots (Claude Code's Bash tool) keep only workytree() and wt(). No `emulate -L`: it would
 # drop the caller's cd options (auto_pushd, chase_links) for the final cd.
 workytree() {
-  setopt localoptions noksharrays noshwordsplit
+  setopt localoptions noksharrays noshwordsplit noerrreturn noerrexit
   local bin="${WORKYTREE_BIN:-}"
   [[ -n "$bin" && -x "$bin" ]] || bin="${commands[workytree]:-}"
   if [[ -z "$bin" ]]; then
@@ -51,8 +51,12 @@ workytree() {
     elif (( ! want_ai && ! ${_WORKYTREE_AI_CONFIGURED:-0} )); then ai_skip=startup
     fi
   fi
-  if [[ "$mode" == script || "$sub" != (create|cd|remove|status) ]]; then
-    WORKYTREE_SHELL=$mode WORKYTREE_AI_SKIP=$ai_skip "$bin" "$@"
+  local -i follows=0
+  case "$sub" in
+    create|cd|remove|status) [[ "$mode" == script ]] || follows=1 ;;
+  esac
+  if (( ! follows )); then
+    WORKYTREE_SHELL=$mode WORKYTREE_AI_RUNFILE= WORKYTREE_AI_SKIP=$ai_skip "$bin" "$@"
     return
   fi
 
@@ -74,7 +78,7 @@ workytree() {
       [[ -n "$target" ]] && print -r -- "$target"
       return 0
     fi
-    builtin cd -- "$target" || return 1
+    builtin cd -- "$target" >&2 || return 1
     if [[ "$mode" != terminal ]]; then
       print -r -- "$target"
     elif (( ! plain )) && [[ -z "${NO_COLOR:-}" && "${TERM:-}" != dumb ]]; then
@@ -93,7 +97,7 @@ workytree() {
     if [[ ! -d "$PWD" ]]; then
       local up="${PWD:h}"
       while [[ "$up" != / && ! -d "$up" ]]; do up="${up:h}"; done
-      builtin cd -- "$up" 2>/dev/null \
+      builtin cd -- "$up" >&2 2>/dev/null \
         && print -u2 -r -- "workytree: your shell's directory was removed; moved to $up"
     fi
   }

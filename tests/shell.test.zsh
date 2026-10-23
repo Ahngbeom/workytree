@@ -473,6 +473,13 @@ test_capture_and_pipes_get_the_bare_path() {
   wt create app fix A main -y >/dev/null 2>&1
   assert_eq "$(zsh_i 'x=$(wt cd app fix A); print -r -- "[$x]"')" "[$HOME/wts/app/fix/A]"
   assert_eq "$(zsh_i 'wt create app fix B main -y 2>/dev/null | tail -1')" "$HOME/wts/app/fix/B"
+  assert_eq "$(zsh_i 'chpwd() { print CHPWD-RAN }; x=$(wt cd app fix A 2>/dev/null); print -r -- "[$x]"')" \
+    "[$HOME/wts/app/fix/A]" "a printing chpwd hook (nvm load-nvmrc, auto-ls) stays out of x=\$(wt cd ...)"
+  assert_contains "$(zsh_i 'chpwd() { print CHPWD-RAN }; wt cd app fix A')" "CHPWD-RAN" \
+    "the hook's output still reaches the user outside a capture"
+  stand_in 'rm -rf "$PWD"; echo ONLY'
+  assert_eq "$(zsh_i 'WORKYTREE_BIN=$HOME/stand-in; mkdir ~/gone; cd ~/gone; chpwd() { print CHPWD-RAN }; x=$(wt cd x 2>/dev/null); unfunction chpwd; print -r -- "[$x]"')" \
+    "[ONLY]" "the recovery cd keeps a printing hook out of the capture too"
 }
 
 test_terminal_cd_line_honours_no_color_and_dumb_terminals() {
@@ -509,6 +516,8 @@ test_failure_replays_every_line_and_keeps_the_exit_code() {
   mkdir -p "$HOME/src/app/.git/refs/heads/fix"; : > "$HOME/src/app/.git/refs/heads/fix/EX.lock"
   assert_contains "$(zsh_i 'cd ~; wt create app fix EX main -y 2>/dev/null; print rc=$?; pwd')" \
     "base ref: main"$'\n'"rc=1"$'\n'"$HOME"
+  assert_contains "$(zsh_i 'setopt err_return; cd ~; wt create app fix EX main -y 2>/dev/null || print rc=$?; pwd')" \
+    "base ref: main"$'\n'"rc=1"$'\n'"$HOME" "the replay survives the caller's err_return"
 }
 
 # Claude Code's shell snapshot keeps workytree() and wt() but drops `_`-prefixed helpers and
@@ -554,6 +563,10 @@ EOF
   out="$(pty_run "$code")"
   modes=( ${(M)${(f)out}:#mode=*} )
   assert_eq "$modes" "mode=terminal mode=captured mode=captured mode=redirected mode=captured mode=script"
+
+  stand_in 'echo "proto=[$WORKYTREE_AI_RUNFILE][$WORKYTREE_AI_SKIP]"'
+  out="$(WORKYTREE_AI_RUNFILE=/inherited zsh -f -c "source '$SHELL_FILE'; WORKYTREE_BIN=$HOME/stand-in; wt create app fix X" 2>&1)"
+  assert_eq "$out" "proto=[][script]" "script mode sends SKIP alone: an inherited RUNFILE is dropped"
 }
 
 test_ctrl_c_removes_the_runfile_and_keeps_the_users_exit_trap() {
@@ -593,6 +606,14 @@ test_cd_to_a_missing_worktree_fails_and_stays_put() {
   assert_contains "$out" "workytree: not found: $HOME/wts/app/fix/NOPE"
   assert_contains "$out" "rc=1"$'\n'"$HOME"
   assert_not_exists "$HOME/m"
+}
+
+test_wrapper_sources_and_works_under_sh_glob() {
+  fixture
+  wt create app fix A main -y >/dev/null 2>&1
+  local out
+  out="$(zsh -f -c "setopt sh_glob; source '$SHELL_FILE'; print -r -- \"fn=\${+functions[workytree]}\${+functions[wt]}\"; wt cd app fix A" 2>&1)"
+  assert_eq "$out" "fn=11"$'\n'"$HOME/wts/app/fix/A" "sh_glob must not stop wt and workytree from being defined"
 }
 
 run_tests
