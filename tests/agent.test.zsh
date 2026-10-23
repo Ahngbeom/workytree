@@ -598,7 +598,7 @@ EOF
 }
 
 test_no_ai_flag_writes_nothing_and_says_nothing() {
-  cli_fixture; fake_agent claude
+  cli_fixture; fake_agent fakeagent; wt config set ai_agent fakeagent >/dev/null
   wt config set ai_session always >/dev/null
   local rf="$TMP_ROOT/runfile" out; : > "$rf"
   out="$(WORKYTREE_AI_RUNFILE="$rf" wt create app fix PROJ-1 main --no-ai -y 2>&1)"
