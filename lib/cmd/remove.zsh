@@ -40,7 +40,7 @@ _wt_remote_branch() {
 
 remove_remote_branch() {
   local repo_path="$1" remote="$2" rbranch="$3" out
-  if out="$(git -C "$repo_path" push "$remote" --delete "$rbranch" 2>&1)"; then
+  if out="$(wt_git_remote "$repo_path" push "$remote" --delete "$rbranch" 2>&1)"; then
     success "deleted remote branch: $remote/$rbranch"; return 0
   fi
   warn "failed to delete remote branch: $remote/$rbranch. git said:"; _wt_indent_and_cap "$out" >&2

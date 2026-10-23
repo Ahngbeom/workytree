@@ -150,4 +150,38 @@ test_ai_session_runs_with_yes_and_is_skipped_without_a_terminal() {
   assert_contains "$out" "ai session skipped: ai_session = ask needs a terminal to ask (pass --ai or -y to run it)"
 }
 
+# origin_with_probe_push: origin is a local bare repo for fetches, but pushes go to a
+# wtprobe:: URL, which git hands to $HOME/bin/git-remote-wtprobe. The helper logs the
+# GIT_TERMINAL_PROMPT it was given and fails, like a remote that wants credentials.
+origin_with_probe_push() {
+  git init -q --bare "$HOME/origin.git"
+  git -C "$HOME/src/app" remote add origin "$HOME/origin.git"
+  git -C "$HOME/src/app" push -q origin main
+  git -C "$HOME/src/app" config remote.origin.pushurl wtprobe::x
+  mkdir -p "$HOME/bin"
+  printf '#!/bin/sh\necho "prompt=[$GIT_TERMINAL_PROMPT]" >> "%s/probe.log"\nexit 1\n' "$HOME" > "$HOME/bin/git-remote-wtprobe"
+  chmod +x "$HOME/bin/git-remote-wtprobe"
+  export PATH="$HOME/bin:$PATH"
+}
+
+# with_pushed_branch <ticket>: a worktree fix/<ticket> whose branch is on origin.
+with_pushed_branch() {
+  wt create app fix "$1" main -y >/dev/null 2>&1
+  git -C "$HOME/src/app" push -q "$HOME/origin.git" "fix/$1"
+  git -C "$HOME/src/app" fetch -q origin
+  git -C "$HOME/src/app" branch -q -u "origin/fix/$1" "fix/$1"
+}
+
+test_remote_git_never_prompts_for_credentials() {
+  fixture; origin_with_probe_push
+  with_pushed_branch R1
+  local out rc
+  out="$(wt remove app fix R1 -r -y 2>&1)"; rc=$?
+  assert_eq "$rc" 0 "a failed remote delete is a ✗ row, not a failed remove"
+  assert_contains "$out" "failed to delete remote branch: origin/fix/R1"
+  with_pushed_branch R2
+  pty_run "$WT_BIN remove app fix R2 -r -y" >/dev/null
+  assert_eq "$(<"$HOME/probe.log")" $'prompt=[0]\nprompt=[0]' "no terminal, then a terminal"
+}
+
 run_tests
