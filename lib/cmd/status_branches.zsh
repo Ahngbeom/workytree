@@ -188,3 +188,215 @@ cmd___status-branch-preview() {
   done
   return 0
 }
+
+# BR_PLAN_AHEAD[k] is BR_PLAN[k]'s base_ahead: append to both or neither (_br_plan_add).
+typeset -ga BR_PLAN BR_PLAN_AHEAD BR_APPROVED
+typeset -gA BR_REPO_NAME
+
+# _branches_remote_all_mine <repo_path> <base_ref|-> <remote_sha> <user_email>: rc 0 when the
+# tip and every commit of base..sha (only the tip when base is -) were authored by user_email,
+# ignoring case.
+_branches_remote_all_mine() {
+  local rp="$1" base="$2" sha="$3" email="${(L)4}" out='' a
+  [[ -n "$email" ]] || return 1
+  if [[ "$base" != - ]]; then
+    out="$(git -C "$rp" log --format=%ae "$sha" --not "$base" -- 2>/dev/null)" || return 1
+  fi
+  if [[ -z "$out" ]]; then
+    out="$(git -C "$rp" log -1 --format=%ae "$sha" -- 2>/dev/null)" || return 1
+  fi
+  [[ -n "$out" ]] || return 1
+  for a in "${(@f)out}"; do [[ "${(L)a}" == "$email" ]] || return 1; done
+  return 0
+}
+
+# _br_plan_add <class> <repo_path> <branch> <target> <local_sha> <remote_sha> <reason> [ahead]
+_br_plan_add() {
+  BR_PLAN+=("$1"$'\t'"$2"$'\t'"$3"$'\t'"$4"$'\t'"$5"$'\t'"$6"$'\t'"${7//$'\t'/ }")
+  BR_PLAN_AHEAD+=("${8:--}")
+}
+
+# _br_plan_unlisted <repo_path> <branch> <error note|->: a skip entry for a marked name the
+# fresh collection left out.
+_br_plan_unlisted() {
+  local rp="$1" b="$2" reason="$3" lsha rsha target=-
+  lsha="$(git -C "$rp" rev-parse -q --verify "refs/heads/$b" 2>/dev/null)" || lsha=-
+  rsha="$(git -C "$rp" rev-parse -q --verify "refs/remotes/origin/$b" 2>/dev/null)" || rsha=-
+  if [[ "$lsha" != - && "$rsha" != - ]]; then target=local+origin
+  elif [[ "$lsha" != - ]]; then target=local
+  elif [[ "$rsha" != - ]]; then target=origin; fi
+  if [[ "$reason" == - ]]; then
+    if [[ "$target" == - ]]; then reason="no longer exists"
+    elif [[ $'\n'"$(git -C "$rp" worktree list --porcelain 2>/dev/null)"$'\n' == *$'\nbranch refs/heads/'"$b"$'\n'* ]]; then
+      reason="checked out in a worktree"
+    else reason="base branch"; fi
+  fi
+  _br_plan_add skip "$rp" "$b" "$target" "$lsha" "$rsha" "$reason"
+}
+
+# _branches_plan <records_file>: BR_PLAN from the marked fzf lines, re-judged from current refs
+# (after fetching origin where a remote or pushed row needs it). BR_REPO_NAME maps repo_path
+# to the repo name. Of each line only project, repo, repo_path, branch, owner and why are read.
+_branches_plan() {
+  local file="$1" line rp b key tmp prs days l base email rec lsha rsha owner why cls note ahead target
+  local -a f order marked_rp marked_b
+  local -A project seen need_fetch fetched frec err_note days_of base_of email_of
+  local -i i k tl tr
+  BR_PLAN=() BR_PLAN_AHEAD=() BR_REPO_NAME=()
+  [[ -r "$file" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    f=("${(@ps:\t:)line}")
+    (( ${#f} >= 10 )) || continue
+    rp="${f[4]}" b="${f[5]}"
+    # An error record has no branch, and "-" is not a valid branch name.
+    [[ "$rp" == - || "$b" == - ]] && continue
+    if (( ! ${+project[$rp]} )); then
+      order+=("$rp"); project[$rp]="${f[2]}"; BR_REPO_NAME[$rp]="${f[3]}"
+    fi
+    [[ "${f[9]}" == me || "${f[10]}" == pushed ]] && need_fetch[$rp]=1
+    key="$rp"$'\t'"$b"
+    (( ${+seen[$key]} )) && continue
+    seen[$key]=1; marked_rp+=("$rp"); marked_b+=("$b")
+  done < "$file"
+  (( ${#order} )) || return 0
+
+  tmp="$(mktemp -d 2>/dev/null)" || die "could not create a temp directory"
+  i=0
+  for rp in "${order[@]}"; do
+    (( ++i ))
+    fetched[$rp]=none
+    if (( ${+need_fetch[$rp]} )); then
+      if wt_fetch_origin "$rp"; then fetched[$rp]=ok; else fetched[$rp]=failed; fi
+    fi
+    prs=''
+    : > "$tmp/$i.err"
+    if (( ! ST_OFFLINE )) && forge_pr_rows "$rp" > "$tmp/$i.prs" 2>> "$tmp/$i.err"; then prs="$tmp/$i.prs"; fi
+    (( ${+days_of[${project[$rp]}]} )) || days_of[${project[$rp]}]="$(status_stale_days "${project[$rp]}")"
+    days="${days_of[${project[$rp]}]}"
+    for line in ${(f)"$(status_collect_branches "${project[$rp]}" "${BR_REPO_NAME[$rp]}" "$rp" "$days" ${prs:+"$prs"} 2>> "$tmp/$i.err")"}; do
+      f=("${(@ps:\t:)line}")
+      if [[ "${f[1]}" == error ]]; then err_note[$rp]="${f[17]}"
+      else frec[$rp$'\t'${f[5]}]="$line"; fi
+    done
+    while IFS= read -r l; do [[ -n "$l" ]] && warn "note: ${BR_REPO_NAME[$rp]}: $l"; done < "$tmp/$i.err"
+    base="$(status_base_ref "$rp" 2>/dev/null)" || base=-
+    base_of[$rp]="$base"
+    email_of[$rp]="$(git -C "$rp" config user.email 2>/dev/null)"
+  done
+  rm -rf "$tmp"
+
+  for (( k = 1; k <= ${#marked_rp}; k++ )); do
+    rp="${marked_rp[k]}" b="${marked_b[k]}"
+    rec="${frec[$rp$'\t'$b]:-}"
+    if [[ -z "$rec" ]]; then _br_plan_unlisted "$rp" "$b" "${err_note[$rp]:--}"; continue; fi
+    f=("${(@ps:\t:)rec}")
+    lsha="${f[6]}" rsha="${f[7]}" owner="${f[9]}" why="${f[10]}" cls="${f[11]}" ahead="${f[13]}" note="${f[17]}"
+    if [[ "$cls" != (safe|force) ]]; then
+      target=local+origin
+      [[ "$rsha" == - ]] && target=local
+      [[ "$lsha" == - ]] && target=origin
+      _br_plan_add skip "$rp" "$b" "$target" "$lsha" "$rsha" "$note"
+      continue
+    fi
+    tl=0 tr=0
+    [[ "$lsha" != - ]] && tl=1
+    if [[ "$rsha" != - && "$owner" == me ]]; then
+      case "${fetched[$rp]}" in
+        failed) _br_plan_add skip "$rp" "$b" origin - "$rsha" "could not fetch origin" ;;
+        none) _br_plan_add skip "$rp" "$b" origin - "$rsha" "origin was not fetched" ;;
+        *)
+          if _branches_remote_all_mine "$rp" "${base_of[$rp]}" "$rsha" "${email_of[$rp]}"; then tr=1
+          else _br_plan_add skip "$rp" "$b" origin - "$rsha" "has commits by others"; fi ;;
+      esac
+    fi
+    # pushed means "origin keeps every commit", which only a fresh origin ref can say.
+    if [[ "$why" == pushed && "${fetched[$rp]}" != ok ]]; then
+      cls=force note="origin not fetched, so not proven: $note"
+    fi
+    # The record's base_ahead also counted the origin side this plan no longer deletes.
+    if (( tl && ! tr )) && [[ "$rsha" != - && "$owner" == me ]]; then
+      ahead=-
+      if [[ "${base_of[$rp]}" != - ]]; then
+        ahead="$(git -C "$rp" rev-list --count "$lsha" --not "${base_of[$rp]}" -- 2>/dev/null)" || ahead=-
+      fi
+    fi
+    if (( tl && tr )); then target=local+origin
+    elif (( tl )); then target=local
+    elif (( tr )); then target=origin
+    else continue; fi
+    (( tl )) || lsha=-
+    (( tr )) || rsha=-
+    _br_plan_add "$cls" "$rp" "$b" "$target" "$lsha" "$rsha" "$note" "$ahead"
+  done
+  return 0
+}
+
+# _branches_print_plan: BR_PLAN as the three groups, on stderr.
+_branches_print_plan() {
+  local e c head sha
+  local -a f
+  local -i w1=4 w2=6 w3=6 w4=7 n
+  for e in "${BR_PLAN[@]}"; do
+    f=("${(@ps:\t:)e}")
+    (( ${#BR_REPO_NAME[${f[2]}]} > w1 )) && w1=${#BR_REPO_NAME[${f[2]}]}
+    (( ${#f[3]} > w2 )) && w2=${#f[3]}
+    (( ${#f[4]} > w3 )) && w3=${#f[4]}
+  done
+  for c in safe force skip; do
+    case "$c" in
+      safe) head="safe — merged or its ticket is merged" ;;
+      force) head="needs force — commits would exist nowhere else" ;;
+      skip) head=skipped ;;
+    esac
+    print -u2 -r -- "$head"
+    n=0
+    for e in "${BR_PLAN[@]}"; do
+      f=("${(@ps:\t:)e}")
+      [[ "${f[1]}" == "$c" ]] || continue
+      (( ++n ))
+      if [[ "${f[5]}" != - && "${f[6]}" != - && "${f[5]}" != "${f[6]}" ]]; then sha="${f[5][1,7]}/${f[6][1,7]}"
+      elif [[ "${f[5]}" != - ]]; then sha="${f[5][1,7]}"
+      elif [[ "${f[6]}" != - ]]; then sha="${f[6][1,7]}"
+      else sha=-; fi
+      print -u2 -r -- "  ${(r:w1:)BR_REPO_NAME[${f[2]}]}  ${(r:w2:)f[3]}  ${(r:w3:)f[4]}  ${(r:w4:)sha}  ${f[7]}"
+    done
+    (( n )) || print -u2 -r -- "  (none)"
+  done
+}
+
+# _branches_ask: BR_APPROVED = the safe entries after one yes, plus each force entry its own
+# yes approved.
+_branches_ask() {
+  local ahead
+  local -a f safe
+  local -i k refs=0
+  BR_APPROVED=()
+  for (( k = 1; k <= ${#BR_PLAN}; k++ )); do
+    f=("${(@ps:\t:)BR_PLAN[k]}")
+    [[ "${f[1]}" == safe ]] || continue
+    safe+=("${BR_PLAN[k]}")
+    if [[ "${f[4]}" == local+origin ]]; then (( refs += 2 )); else (( ++refs )); fi
+  done
+  (( ${#safe} )) && prompt_confirm "delete the $refs safe refs?" n && BR_APPROVED+=("${safe[@]}")
+  for (( k = 1; k <= ${#BR_PLAN}; k++ )); do
+    f=("${(@ps:\t:)BR_PLAN[k]}")
+    [[ "${f[1]}" == force ]] || continue
+    ahead="${BR_PLAN_AHEAD[k]}"; [[ "$ahead" == <-> ]] || ahead="an unknown number of"
+    prompt_confirm "force-delete ${f[3]} (${f[4]}) and lose $ahead commits?" n && BR_APPROVED+=("${BR_PLAN[k]}")
+  done
+  return 0
+}
+
+# _branches_delete <records_file>: alt-d. Plan, print, ask.
+_branches_delete() {
+  _branches_plan "$1"
+  BR_APPROVED=()
+  if (( ${#BR_PLAN} )); then
+    _branches_print_plan
+    _branches_ask
+  else
+    warn "no branch rows marked"
+  fi
+  _status_pause
+  return 0
+}

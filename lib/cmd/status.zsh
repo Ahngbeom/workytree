@@ -523,10 +523,20 @@ _status_pause() {
 }
 
 # __status-action remove|open <fzf line>: what ctrl-d / ctrl-o do to the highlighted row.
+# __status-action delete-branches <file> [status options]: alt-d over the marked branch rows
+# that fzf wrote to <file>.
 cmd___status-action() {
   local action="${1:-}"
+  if [[ "$action" == delete-branches ]]; then
+    (( $# >= 2 )) || usage_error "usage: workytree __status-action remove|open <record> | delete-branches <file> [status options]"
+    local file="$2"; shift 2
+    require_config
+    _status_parse_opts "$@"
+    _branches_delete "$file"
+    return 0
+  fi
   local -a f; f=("${(@ps:\t:)${2:-}}")
-  (( ${#f} >= 26 )) || usage_error "usage: workytree __status-action remove|open <record>"
+  (( ${#f} >= 26 )) || usage_error "usage: workytree __status-action remove|open <record> | delete-branches <file> [status options]"
   case "$action" in
     remove)
       if [[ "${f[1]}" == worktree && "${f[6]}" != - ]]; then
@@ -541,7 +551,7 @@ cmd___status-action() {
       if (( $+commands[open] )); then open "${f[25]}"
       elif (( $+commands[xdg-open] )); then xdg-open "${f[25]}" >/dev/null 2>&1
       fi ;;
-    *) usage_error "usage: workytree __status-action remove|open <record>" ;;
+    *) usage_error "usage: workytree __status-action remove|open <record> | delete-branches <file> [status options]" ;;
   esac
   return 0
 }
