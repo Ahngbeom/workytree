@@ -119,7 +119,9 @@ _branches_fetch_age() {
     for line in "${(@f)$(git -C "$rp" worktree list --porcelain 2>/dev/null)}"; do
       [[ "$line" == "worktree "* ]] || continue
       p="${line#worktree }"
-      fh="$(git -C "$p" rev-parse --path-format=absolute --git-path FETCH_HEAD 2>/dev/null)" || fh="$p/.git/FETCH_HEAD"
+      fh="$(git -C "$p" rev-parse --git-path FETCH_HEAD 2>/dev/null)" || fh=''
+      [[ -n "$fh" && "$fh" != *$'\n'* ]] || fh=.git/FETCH_HEAD
+      [[ "$fh" == /* ]] || fh="$p/$fh"
       [[ -s "$fh" ]] && zstat -A t +mtime -- "$fh" 2>/dev/null || continue
       (( t[1] > newest )) && newest=${t[1]}
     done

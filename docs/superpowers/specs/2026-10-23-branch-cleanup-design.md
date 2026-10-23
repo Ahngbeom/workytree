@@ -73,7 +73,7 @@
 
 보호 브랜치 `main`, `master`, `develop`, `release/*`는 행으로 보이지만 WHY가 `protected`이고 지울 수 없다. gitflow repo에서 base가 `develop`이면 뒤처진 `master`가 ancestry상 `merged`가 되기 때문이다.
 
-헤더에 `origin` ref의 대략적인 마지막 fetch 시점을 항상 표시한다. repo마다 메인 checkout과 링크된 워크트리의 `FETCH_HEAD`(`git rev-parse --path-format=absolute --git-path FETCH_HEAD`) 중 비어 있지 않은 파일의 가장 최근 mtime을 쓴다. 그런 파일이 없는 repo는 "never fetched"로 센다. 실패한 fetch는 이 파일을 0바이트로 만들고, 다른 원격 fetch도 mtime을 바꾸므로 참고 값일 뿐이다. 원격 삭제 직전에는 어차피 다시 fetch한다("삭제 흐름" 1단계).
+헤더에 `origin` ref의 대략적인 마지막 fetch 시점을 항상 표시한다. repo마다 메인 checkout과 링크된 워크트리의 `FETCH_HEAD`(`git rev-parse --git-path FETCH_HEAD`, 상대 경로면 그 checkout 기준) 중 비어 있지 않은 파일의 가장 최근 mtime을 쓴다. 그런 파일이 없는 repo는 "never fetched"로 센다. 실패한 fetch는 이 파일을 0바이트로 만들고, 다른 원격 fetch도 mtime을 바꾸므로 참고 값일 뿐이다. 원격 삭제 직전에는 어차피 다시 fetch한다("삭제 흐름" 1단계).
 
 ## 소유 판정
 

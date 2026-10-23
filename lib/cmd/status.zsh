@@ -67,8 +67,13 @@ _status_unique_repos() {
     (( ++i ))
     [[ -n "$line" ]] || continue
     rp="${${(@ps:\t:)line}[3]}"
-    key="$(git -C "$rp" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || key=''
-    [[ -n "$key" ]] || key="$rp"
+    key="$(git -C "$rp" rev-parse --git-common-dir 2>/dev/null)" || key=''
+    if [[ -n "$key" && "$key" != *$'\n'* ]]; then
+      [[ "$key" == /* ]] || key="$rp/$key"
+      key="${key:A}"
+    else
+      key="$rp"
+    fi
     keys[i]="$key"
     dir_git=0; [[ -d "$rp/.git" ]] && dir_git=1
     if [[ -z "${owner[$key]:-}" ]]; then

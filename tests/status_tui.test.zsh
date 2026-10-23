@@ -363,6 +363,28 @@ test_fetch_age_counts_the_main_checkout_and_ignores_empty_files() {
   assert_eq "${reply[*]}" "1 1"
 }
 
+test_fetch_age_is_read_on_old_git() {
+  fixture
+  local fh="$HOME/src/app/.git/FETCH_HEAD" wfh
+  print x > "$fh"; touch -t 202401010000 "$fh"
+  git() {
+    if [[ "$1" == -C && "$3" == rev-parse && " ${@[4,-1]} " == *" --path-format=absolute "* ]]; then
+      print -r -- --path-format=absolute
+      command git -C "$2" rev-parse "${(@)${@[4,-1]}:#--path-format=absolute}"; return
+    fi
+    command git "$@"
+  }
+  _branches_fetch_age "$HOME/src/app"
+  assert_eq "${reply[*]}" "1 0" main-checkout
+  assert_eq "$([[ $REPLY == <-> ]] && (( REPLY > 86400 )) && print old)" old "age of the 2024 fetch: $REPLY"
+  wfh="$(command git -C "$HOME/wts/app/fix/A" rev-parse --git-path FETCH_HEAD)"
+  [[ "$wfh" == /* ]] || wfh="$HOME/wts/app/fix/A/$wfh"
+  print x > "$wfh"
+  _branches_fetch_age "$HOME/src/app"
+  assert_eq "$([[ $REPLY == <-> ]] && (( REPLY < 3600 )) && print new)" new "linked worktree: $REPLY"
+  unfunction git
+}
+
 test_branch_preview_does_not_touch_the_network() {
   fixture
   git clone -q --bare "$HOME/src/app" "$HOME/origin.git"

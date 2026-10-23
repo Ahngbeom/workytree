@@ -108,6 +108,34 @@ test_stale_days_from_config_and_override() {
   ST_STALE_DAYS=-1
 }
 
+# old_git: git < 2.31, whose rev-parse echoes --path-format=absolute as an unknown argument.
+old_git() {
+  git() {
+    if [[ "$1" == -C && "$3" == rev-parse && " ${@[4,-1]} " == *" --path-format=absolute "* ]]; then
+      print -r -- --path-format=absolute
+      command git -C "$2" rev-parse "${(@)${@[4,-1]}:#--path-format=absolute}"; return
+    fi
+    command git "$@"
+  }
+}
+
+test_unique_repos_keeps_repos_apart_on_old_git() {
+  make_repo "$HOME/src/a"; make_repo "$HOME/src/b"
+  git -C "$HOME/src/a" worktree add -q "$HOME/src/a-wt" -b x
+  local in=$'awt\tme\t'"$HOME/src/a-wt"$'\na\tme\t'"$HOME/src/a"$'\nb\tme\t'"$HOME/src/b"
+  assert_eq "$(_status_unique_repos "$in" | cut -f1 | tr '\n' ' ')" "a b " current-git
+  assert_eq "$(old_git; _status_unique_repos "$in" | cut -f1 | tr '\n' ' ')" "a b " old-git
+}
+
+test_unique_repos_keys_unreadable_lines_by_path() {
+  make_repo "$HOME/src/a"; mkdir -p "$HOME/src/x" "$HOME/src/y"
+  local in=$'x\tme\t'"$HOME/src/x"$'\na\tme\t'"$HOME/src/a"$'\ny\tme\t'"$HOME/src/y"$'\nx2\tme\t'"$HOME/src/x"
+  assert_eq "$(_status_unique_repos "$in" | cut -f1 | tr '\n' ' ')" "x a y " not-a-repo
+  local two=$'a\tme\t'"$HOME/src/a"$'\nx\tme\t'"$HOME/src/x"
+  assert_eq "$(git() { [[ "$3" == rev-parse ]] && { print one; print two; return 0; }; command git "$@"; }
+    _status_unique_repos "$two" | cut -f1 | tr '\n' ' ')" "a x " multi-line-answer
+}
+
 # More repos than WT_STATUS_MAX_JOBS run in batches; output stays in config order.
 test_collect_keeps_config_order_across_batches() {
   local n
