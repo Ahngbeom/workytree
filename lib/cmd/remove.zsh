@@ -6,15 +6,15 @@ remove_branch() {
   REPLY="$(git -C "$repo_path" rev-parse --short "refs/heads/$branch" 2>/dev/null)"
   if out="$(git -C "$repo_path" branch "$flag" "$branch" 2>&1)"; then
     success "deleted branch $branch (was $REPLY)"
-    hint "restore it with: git -C $repo_path branch $branch $REPLY"
+    hint "restore it with: git -C ${(q)repo_path} branch ${(q)branch} ${(q)REPLY}"
     return 0
   fi
   if (( force )); then
     warn "failed to delete branch: $branch. git said:"; _wt_indent_and_cap "$out" >&2
-    hint "inspect it with: git -C $repo_path branch -vv --list $branch"
+    hint "inspect it with: git -C ${(q)repo_path} branch -vv --list ${(q)branch}"
   else
     warn "branch not deleted (likely unmerged): $branch"
-    hint "force-delete it with: git -C $repo_path branch -D $branch"
+    hint "force-delete it with: git -C ${(q)repo_path} branch -D ${(q)branch}"
   fi
   return 1
 }
@@ -48,12 +48,12 @@ remove_remote_branch() {
   REPLY="$(git -C "$repo_path" rev-parse --short "$sha" 2>/dev/null)"
   if out="$(git -C "$repo_path" push --force-with-lease="refs/heads/${rbranch}:${sha}" "$remote" --delete "$rbranch" 2>&1)"; then
     success "deleted remote branch $remote/$rbranch (was $REPLY)"
-    hint "restore it with: git -C $repo_path push $remote ${REPLY}:refs/heads/$rbranch"
+    hint "restore it with: git -C ${(q)repo_path} push ${(q)remote} ${(q)REPLY}:refs/heads/${(q)rbranch}"
     return 0
   fi
   warn "failed to delete remote branch: $remote/$rbranch. git said:"; _wt_indent_and_cap "$out" >&2
-  hint "if it moved or is already gone upstream, refresh the ref and look again: git -C $repo_path fetch --prune $remote"
-  hint "otherwise check network, credentials and branch protection, then retry: git -C $repo_path push --force-with-lease=refs/heads/${rbranch}:${REPLY} $remote --delete $rbranch"
+  hint "if it moved or is already gone upstream, refresh the ref and look again: git -C ${(q)repo_path} fetch --prune ${(q)remote}"
+  hint "otherwise check network, credentials and branch protection, then retry: git -C ${(q)repo_path} push --force-with-lease=refs/heads/${(q)rbranch}:${(q)REPLY} ${(q)remote} --delete ${(q)rbranch}"
   return 1
 }
 
@@ -232,7 +232,7 @@ cmd_remove() {
   if [[ -n "$other" ]] && (( ! interactive && (delete_branch || delete_remote) )); then
     die_with_hints "'$other' is checked out, not its ticket branch '$ticket_branch'; refusing to guess which branch -b/-B/-r mean" \
       "remove the worktree and keep both branches: workytree remove $repo $kind $ticket" \
-      "then delete the one you mean: git -C $repo_path branch -D <branch>"
+      "then delete the one you mean: git -C ${(q)repo_path} branch -D <branch>"
   fi
 
   info "removing worktree"; print -r -- "  path: $target"; print -r -- "  branch: $branch_desc"
@@ -269,12 +269,12 @@ cmd_remove() {
       die_with_hints $'could not verify worktree status (git status exited '"$WT_DIRT_RC"$'); refusing to guess whether it is safe to remove. git said:
 '"$(_wt_indent_and_cap "$WT_DIRT_DETAIL")"$'
 (--force overrides this refusal, but may not resolve the underlying problem)' \
-        "if git reports an unreadable directory, restore access (e.g. chmod -R u+rwX $target) and retry"
+        "if git reports an unreadable directory, restore access (e.g. chmod -R u+rwX ${(q)target}) and retry"
     fi
   elif [[ "$dirt_kind" == real ]] || has_dirty_submodule "$target"; then
     if (( ! force_remove )); then
       local -a dirty_hints
-      dirty_hints=("keep the work: commit it, or stash it with: git -C $target stash -u" "discard it: re-run with --force")
+      dirty_hints=("keep the work: commit it, or stash it with: git -C ${(q)target} stash -u" "discard it: re-run with --force")
       (( interactive )) || die_with_hints "worktree has changes outside .idea/ (or a dirty submodule); use --force to remove" "${dirty_hints[@]}"
       warn "worktree has changes outside .idea/ (or a dirty submodule)"
       if prompt_confirm "discard these changes and force-remove the worktree?" n; then
@@ -299,7 +299,7 @@ cmd_remove() {
   fi
   if (( delete_remote )) && [[ -z "$remote" ]]; then
     warn "no remote branch known for '$ticket_branch'; skipping remote delete"
-    hint "if it exists upstream, refresh tracking refs first: git -C $repo_path fetch --all"
+    hint "if it exists upstream, refresh tracking refs first: git -C ${(q)repo_path} fetch --all"
     delete_remote=0
   fi
   local verdict="" base_name="" label="" pr_head=""
@@ -341,7 +341,7 @@ cmd_remove() {
     elif (( delete_remote )); then
       delete_branch=0
       warn "keeping local branch $branch: it is not merged into $base_name and its remote branch is being deleted"
-      hint "to delete it anyway, and lose its commits: git -C $repo_path branch -D $branch"
+      hint "to delete it anyway, and lose its commits: git -C ${(q)repo_path} branch -D ${(q)branch}"
       branch_row="fail"$'\t'"local branch   kept          $branch (not merged into $base_name; use -B)"
     fi
   fi
@@ -354,7 +354,7 @@ cmd_remove() {
         prompt_confirm "'$remote/$rbranch' has commits that are not in $branch or $rbase_name — delete it anyway and lose them?" n || delete_remote=0
       else
         warn "keeping remote branch $remote/$rbranch: it has commits that are not in $branch or $rbase_name"
-        hint "to delete it anyway, and lose them: git -C $repo_path push $remote --delete $rbranch (or pass -B)"
+        hint "to delete it anyway, and lose them: git -C ${(q)repo_path} push ${(q)remote} --delete ${(q)rbranch} (or pass -B)"
         delete_remote=0
       fi
       (( delete_remote )) || remote_row="fail"$'\t'"remote branch  kept          $remote/$rbranch (has commits not in $branch or $rbase_name; use -B)"
@@ -383,9 +383,9 @@ cmd_remove() {
   builtin cd -- "$repo_path" 2>/dev/null
   ui_progress $(( ++step )) $total "removing worktree"
   local -a remove_hints
-  remove_hints=("if the worktree is locked: git -C $repo_path worktree unlock $target"
+  remove_hints=("if the worktree is locked: git -C ${(q)repo_path} worktree unlock ${(q)target}"
     "close editors or shells holding files inside it, then retry"
-    "check git's view of it: git -C $repo_path worktree list")
+    "check git's view of it: git -C ${(q)repo_path} worktree list")
   if (( force_remove || idea_only )) || has_initialized_submodules "$target"; then
     git -C "$repo_path" worktree remove --force "$target" || die_with_hints "failed to remove worktree" "${remove_hints[@]}"
   else

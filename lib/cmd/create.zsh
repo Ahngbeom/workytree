@@ -67,7 +67,7 @@ _create_name_ok() {
 _create_base_ok() {
   git -C "$1" rev-parse --verify --quiet "$2^{commit}" >/dev/null && return 0
   error "base not found: $2"
-  hint "list branches with: git -C $1 branch -a"
+  hint "list branches with: git -C ${(q)1} branch -a"
   return 1
 }
 
@@ -213,8 +213,8 @@ cmd_create() {
   case "$source" in
     local)
       _create_checked_out_at "$repo_path" "$branch" && die_with_hints "$branch is already checked out at $REPLY" \
-        "work there instead: cd $REPLY" \
-        "or free the branch first: git -C $REPLY switch <another branch>"
+        "work there instead: cd ${(q)REPLY}" \
+        "or free the branch first: git -C ${(q)REPLY} switch <another branch>"
       [[ -n "$base" ]] && warn "base $base ignored: branch $branch already exists"
       plan="existing branch${base:+; base ignored}" ;;
     remote)
