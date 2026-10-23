@@ -161,7 +161,7 @@ _branches_fzf_args() {
   rows="$qbin __status-rows$qargs --branches"
   fetch="$rows"; (( ST_OFFLINE )) || fetch+=" --fetch"
   _branches_fzf_header
-  reply=(--multi --with-nth=18 --bind=enter:ignore
+  reply=(--multi --with-nth=18 --bind=enter:ignore --bind=double-click:ignore
     --preview="$qbin __status-branch-preview {}"
     --bind="alt-d:execute($qbin __status-action delete-branches {+f}$qargs)+deselect-all+reload($rows)"
     --bind="ctrl-r:reload($fetch)"

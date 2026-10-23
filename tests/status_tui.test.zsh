@@ -290,6 +290,7 @@ test_branch_mode_enter_is_ignored() {
   fixture; fzf_selecting branch ctrl-b ''
   local out; out="$(_status_run_fzf "$RECORDS" "$HOME/notes")"
   assert_contains "$(<"$HOME/fzf.args.2")" "--bind=enter:ignore"
+  assert_contains "$(<"$HOME/fzf.args.2")" "--bind=double-click:ignore"
   assert_eq "$out" ""
 }
 

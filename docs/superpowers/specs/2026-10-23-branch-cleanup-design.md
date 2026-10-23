@@ -172,7 +172,7 @@ README의 `✓` 설명과 `tests/status_internal.test.zsh`의 판정표를 같�
 | `ctrl-r` | 모든 repo `git fetch --prune origin` 후 새로고침 (워크트리 목록과 같은 동작) |
 | `ctrl-s` | safe 행만 보기 |
 | `ctrl-b` | 워크트리 목록으로 |
-| `enter` | fzf를 끝내지 않고 목록 유지 |
+| `enter`, 더블클릭 | fzf를 끝내지 않고 목록 유지 |
 
 fzf 최소 버전은 0.38(`lib/cmd/status.zsh:7`)이다. 0.38에는 `transform`(0.45)과 `change-header`(0.40)가 없으므로 다음 제약이 생긴다.
 
