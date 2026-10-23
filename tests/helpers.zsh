@@ -17,7 +17,7 @@ setup_env() {
   # itself a symlink to /private/var. Tools that canonicalize cwd (e.g. `git rev-parse
   # --show-toplevel`) would otherwise report a path that disagrees with $HOME textually
   # while naming the same directory.
-  TMP_ROOT="${$(mktemp -d):A}"
+  TMP_ROOT="${$(mktemp -d "$TMPDIR/wt.XXXXXX"):A}"
   export HOME="$TMP_ROOT/home"
   export XDG_CONFIG_HOME="$HOME/.config"
   mkdir -p "$HOME" "$XDG_CONFIG_HOME"

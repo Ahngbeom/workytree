@@ -166,4 +166,58 @@ test_remove_dashdash_ends_options() {
   assert_not_exists "$WT"
 }
 
+test_branch_flags_refuse_when_another_branch_is_checked_out() {
+  fixture
+  git -C "$WT" switch -q -c spike
+  print s > "$WT/s"; git -C "$WT" add -A; git -C "$WT" commit -qm spike
+  local out; out="$(wt remove app fix T -B 2>&1)"
+  assert_eq "$?" 1
+  assert_contains "$out" "'spike' is checked out, not its ticket branch 'fix/T'"
+  assert_dir "$WT"
+  assert_contains "$(git -C "$HOME/src/app" branch --list spike)" spike "spike kept"
+  assert_exit 1 wt remove app fix T -b
+  assert_exit 0 wt remove app fix T
+  assert_contains "$(git -C "$HOME/src/app" branch --list spike fix/T)" spike "plain remove keeps every branch"
+}
+
+test_branch_and_remote_flags_warn_when_the_ticket_branch_is_missing() {
+  fixture
+  git -C "$WT" switch -q --detach
+  git -C "$HOME/src/app" branch -q -D fix/T
+  local out; out="$(wt remove app fix T -b -r 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$out" "no local branch fix/T; nothing to delete"
+  assert_eq "${out//keeping local branch/}" "$out" "no nameless keep warning"
+  assert_not_exists "$WT"
+}
+
+test_detached_head_branch_flag_deletes_the_ticket_branch() {
+  fixture
+  git -C "$WT" switch -q --detach
+  local out; out="$(wt remove app fix T -b 2>&1)"
+  assert_eq "$?" 0
+  assert_eq "$(git -C "$HOME/src/app" branch --list fix/T)" ""
+}
+
+test_branch_delete_prints_a_restore_command() {
+  fixture
+  print y > "$WT/f"; git -C "$WT" add -A; git -C "$WT" commit -qm c
+  local sha short out
+  sha="$(git -C "$WT" rev-parse HEAD)" short="$(git -C "$WT" rev-parse --short HEAD)"
+  out="$(wt remove app fix T -B 2>&1)"
+  assert_contains "$out" "deleted branch fix/T (was $short)"
+  assert_contains "$out" "local branch   deleted       fix/T (was $short)"
+  assert_contains "$out" "restore it with: git -C $HOME/src/app branch fix/T $short"
+  git -C "$HOME/src/app" branch fix/T "$short"
+  assert_eq "$(git -C "$HOME/src/app" rev-parse fix/T)" "$sha" "restored at the old tip"
+}
+
+test_unmerged_branch_hint_is_runnable() {
+  fixture
+  print y > "$WT/f"; git -C "$WT" add -A; git -C "$WT" commit -qm c
+  local out; out="$(wt remove app fix T -b 2>&1)"
+  assert_contains "$out" "force-delete it with: git -C $HOME/src/app branch -D fix/T"
+  assert_eq "${out//re-run remove/}" "$out" "no hint that needs the removed worktree"
+}
+
 run_tests

@@ -279,17 +279,65 @@ test_gone_upstream_with_remote_flag_skips_push() {
   assert_eq "${out//failed to delete remote branch/}" "$out" "no doomed push"
 }
 
-# `git branch -d` judges "merged" against the upstream when one exists: a branch fully pushed
-# to its upstream but not merged into the repo's HEAD is deletable without force.
-test_branch_published_to_upstream_counts_as_merged() {
-  fixture
-  print y > "$WT/f"; git -C "$WT" add -A; git -C "$WT" commit -qm c
+# commit_in_wt <name>: one commit in the worktree; prints its sha.
+commit_in_wt() { print "$1" > "$WT/$1"; git -C "$WT" add -A; git -C "$WT" commit -qm "$1"; git -C "$WT" rev-parse HEAD; }
+
+test_pushed_only_branch_is_not_called_merged() {
+  fixture; commit_in_wt C >/dev/null
   git -C "$WT" push -q -u origin fix/T 2>/dev/null
-  answers "" "n" ""
+  answers "" "n" ""             # local: default, remote: no, proceed
   local out; out="$(wt remove app fix T 2>&1)"
-  assert_contains "$out" "(merged)"
-  assert_eq "${out//unmerged/}" "$out" "no force prompt"
+  assert_contains "$out" "delete local branch 'fix/T'? (pushed, not merged into origin/main)"
+  assert_contains "$(local_branch fix/T)" "fix/T" "default is No"
+}
+
+test_branch_and_remote_flags_keep_a_branch_not_merged_into_base() {
+  fixture; local sha; sha="$(commit_in_wt C)"
+  git -C "$WT" push -q -u origin fix/T 2>/dev/null
+  local out; out="$(wt remove app fix T -b -r 2>&1)"
+  assert_eq "$?" 0
+  assert_eq "$(remote_branch fix/T)" "" "remote branch deleted"
+  assert_contains "$(local_branch fix/T)" "fix/T" "local branch kept"
+  assert_contains "$out" "not merged into origin/main; use -B"
+  assert_contains "$(git -C "$HOME/src/app" rev-list --all)" "$sha" "commit still reachable"
+}
+
+test_pushed_branch_asks_before_deleting_both_copies() {
+  fixture; local sha; sha="$(commit_in_wt C)"
+  git -C "$WT" push -q -u origin fix/T 2>/dev/null
+  answers "y" "y" "" ""         # local: yes, remote: yes, delete both anyway: default, proceed
+  local out; out="$(wt remove app fix T 2>&1)"
+  assert_contains "$out" "its remote branch is being deleted too"
+  assert_contains "$(local_branch fix/T)" "fix/T" "default keeps the local branch"
+  assert_eq "$(remote_branch fix/T)" "" "remote branch deleted"
+}
+
+# merged_and_gone_fixture: someone merged fix/T into origin/main and deleted its remote branch;
+# the local main checkout never pulled.
+merged_and_gone_fixture() {
+  fixture; commit_in_wt G >/dev/null
+  git -C "$WT" push -q -u origin fix/T 2>/dev/null
+  git clone -q "$HOME/remote.git" "$HOME/other"
+  git -C "$HOME/other" merge -q --no-ff -m "Merge PR" origin/fix/T
+  git -C "$HOME/other" push -q origin main
+  git -C "$HOME/other" push -q origin --delete fix/T
+  git -C "$HOME/src/app" fetch -q --prune origin
+}
+
+test_branch_merged_into_origin_after_its_remote_was_deleted_is_merged() {
+  merged_and_gone_fixture
+  answers "" ""                 # local: default, proceed
+  local out; out="$(wt remove app fix T 2>&1)"
+  assert_contains "$out" "delete local branch 'fix/T'? (merged into origin/main)"
+  assert_eq "${out//unmerged/}" "$out" "no force question"
   assert_eq "$(local_branch fix/T)" ""
+}
+
+test_branch_flag_deletes_a_branch_merged_into_origin_without_force() {
+  merged_and_gone_fixture
+  local out; out="$(wt remove app fix T -b 2>&1)"
+  assert_eq "$?" 0
+  assert_eq "$(local_branch fix/T)" "" "deleted although local main is stale"
 }
 
 # create accepts a ticket containing "/", nesting the worktree one level deeper.
@@ -305,6 +353,227 @@ test_picker_finds_ticket_with_slash() {
   answers ""
   out="$(wt remove app fix 2>&1)"
   assert_eq "${out//T\/sub/}" "$out" "never descends into a worktree"
+}
+
+test_questions_name_the_ticket_branch_when_another_is_checked_out() {
+  fixture; git -C "$WT" switch -q -c spike
+  answers "y" "n" ""            # local fix/T: yes, remote origin/fix/T: no, proceed
+  local out; out="$(wt remove app fix T 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$out" "delete local branch 'fix/T'?"
+  assert_contains "$out" "checked out: spike"
+  assert_eq "$(local_branch fix/T)" ""
+  assert_contains "$(local_branch spike)" spike
+}
+
+test_remote_delete_prints_a_restore_command() {
+  fixture
+  local short out; short="$(git -C "$WT" rev-parse --short HEAD)"
+  out="$(wt remove app fix T -r 2>&1)"
+  assert_contains "$out" "deleted remote branch origin/fix/T (was $short)"
+  assert_contains "$out" "restore it with: git -C $HOME/src/app push origin ${short}:refs/heads/fix/T"
+  git -C "$HOME/src/app" push -q origin "${short}:refs/heads/fix/T"
+  assert_contains "$(remote_branch fix/T)" fix/T "restored"
+}
+
+# teammate_pushes: someone else adds a commit to origin/fix/T; prints its sha.
+teammate_pushes() {
+  git clone -q -b fix/T "$HOME/remote.git" "$HOME/mate" 2>/dev/null
+  git -C "$HOME/mate" commit -q --allow-empty -m teammate
+  git -C "$HOME/mate" push -q origin fix/T 2>/dev/null
+  git -C "$HOME/mate" rev-parse HEAD
+}
+# holders <git dir> <sha>: the refs that still reach <sha>.
+holders() { git -C "$1" for-each-ref --format='%(refname)' --contains "$2"; }
+
+test_remote_flag_keeps_a_remote_branch_with_commits_only_there() {
+  fixture; local sha out; sha="$(teammate_pushes)"
+  out="$(wt remove app fix T -r -y 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$(holders "$HOME/remote.git" "$sha")" refs/heads/fix/T "teammate commit still on the remote"
+  assert_contains "$(holders "$HOME/src/app" "$sha")" refs/remotes/origin/fix/T "teammate commit still tracked"
+  assert_contains "$out" "keeping remote branch origin/fix/T: it has commits that are not in fix/T or origin/main"
+  assert_contains "$out" "push origin --delete fix/T (or pass -B)"
+  assert_contains "$out" "remote branch  kept          origin/fix/T (has commits not in fix/T or origin/main; use -B)"
+}
+
+test_branch_and_remote_flags_keep_a_remote_branch_with_a_teammate_commit() {
+  fixture; local sha out; sha="$(teammate_pushes)"
+  out="$(wt remove app fix T -b -r -y 2>&1)"
+  assert_eq "$?" 0
+  assert_eq "$(local_branch fix/T)" "" "merged local branch deleted"
+  assert_contains "$(holders "$HOME/remote.git" "$sha")" refs/heads/fix/T "teammate commit still on the remote"
+  assert_contains "$out" "origin/fix/T (has commits not in fix/T or origin/main; use -B)"
+}
+
+test_branch_force_flag_deletes_a_remote_branch_with_a_teammate_commit() {
+  fixture; local sha short out; sha="$(teammate_pushes)"
+  out="$(wt remove app fix T -B -r -y 2>&1)"
+  short="$(git -C "$HOME/src/app" rev-parse --short "$sha")"
+  assert_eq "$(remote_branch fix/T)" "" "-B overrides"
+  assert_contains "$out" "deleted remote branch origin/fix/T (was $short)"
+  assert_contains "$out" "restore it with: git -C $HOME/src/app push origin ${short}:refs/heads/fix/T"
+}
+
+# origin's fetch URL is unreachable and its push URL is not, so the tracking ref still names the
+# tip from before the teammate's push.
+test_remote_delete_spares_a_branch_that_moved_since_the_last_fetch() {
+  fixture
+  git -C "$HOME/src/app" remote set-url origin "$HOME/nowhere.git"
+  git -C "$HOME/src/app" remote set-url --push origin "$HOME/remote.git"
+  local sha out; sha="$(teammate_pushes)"
+  out="$(wt remove app fix T -r -y 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$out" "could not fetch origin"
+  assert_contains "$(holders "$HOME/remote.git" "$sha")" refs/heads/fix/T "teammate commit still on the remote"
+  assert_contains "$out" "remote branch  not deleted   origin/fix/T"
+  assert_eq "${out//deleted remote branch/}" "$out" "no success line"
+}
+
+test_remote_flag_deletes_a_remote_branch_the_kept_local_branch_holds() {
+  fixture; commit_in_wt C >/dev/null
+  git -C "$WT" push -q -u origin fix/T 2>/dev/null
+  local out; out="$(wt remove app fix T -r -y 2>&1)"
+  assert_eq "$?" 0
+  assert_eq "$(remote_branch fix/T)" "" "remote branch deleted"
+  assert_contains "$(local_branch fix/T)" fix/T "local branch kept"
+}
+
+test_branch_and_remote_flags_without_a_remote_branch_claim_no_remote_delete() {
+  fixture; git -C "$HOME/src/app" push -q origin --delete fix/T 2>/dev/null
+  commit_in_wt C >/dev/null
+  local out; out="$(wt remove app fix T -b -r -y 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$out" "no remote branch known for 'fix/T'"
+  assert_eq "${out//remote branch is being deleted/}" "$out" "no remote delete claimed"
+  assert_contains "$(local_branch fix/T)" fix/T "unmerged local branch kept"
+}
+
+test_remote_question_about_commits_only_there_defaults_to_no() {
+  fixture; local sha out; sha="$(teammate_pushes)"
+  answers "y" "y" "" ""         # local: yes, remote: yes, lose the remote's commits: default, proceed
+  out="$(wt remove app fix T 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$out" "'origin/fix/T' has commits that are not in fix/T or origin/main — delete it anyway and lose them?"
+  assert_eq "$(local_branch fix/T)" "" "local branch deleted"
+  assert_contains "$(holders "$HOME/remote.git" "$sha")" refs/heads/fix/T "default keeps the remote branch"
+  assert_contains "$out" "origin/fix/T (has commits not in fix/T or origin/main; use -B)"
+}
+
+# develop_upstream_fixture: fix/T tracks origin/develop, as after `switch -c fix/T origin/develop`.
+develop_upstream_fixture() {
+  fixture
+  git -C "$HOME/src/app" push -q origin main:develop 2>/dev/null
+  git -C "$HOME/src/app" branch -q -u origin/develop fix/T
+}
+
+test_remote_flag_ignores_an_upstream_with_another_name() {
+  develop_upstream_fixture; git -C "$HOME/src/app" push -q origin --delete fix/T 2>/dev/null
+  local out; out="$(wt remove app fix T -r -y 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$(remote_branch develop)" develop "origin/develop untouched"
+  assert_contains "$out" "no remote branch known for 'fix/T'"
+}
+
+test_remote_flag_deletes_the_same_named_branch_not_the_upstream() {
+  develop_upstream_fixture
+  local out; out="$(wt remove app fix T -r -y 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$(remote_branch develop)" develop "origin/develop untouched"
+  assert_eq "$(remote_branch fix/T)" "" "origin/fix/T deleted"
+}
+
+# remove_with_prs <args...>: remove with lib/ sourced in a subshell and forge_pr_rows answering
+# from $HOME/prs. A fake gh on PATH cannot shadow a real one (bin/workytree's PATH).
+remove_with_prs() {
+  ( setopt extendedglob
+    typeset -g WT_PROJECT_OPT='' WT_AI_RUNFILE=''; typeset -gi WT_YES=1 WT_CAN_CD=0
+    local f; for f in "$WT_TEST_ROOT"/lib/*.zsh "$WT_TEST_ROOT"/lib/cmd/*.zsh; do source "$f"; done
+    forge_pr_rows() { cat "$HOME/prs"; }
+    ui_init; config_load; cmd_remove "$@" ) < /dev/null
+}
+
+test_remote_branch_whose_pr_was_merged_at_its_tip_is_deleted() {
+  fixture; commit_in_wt C >/dev/null
+  git -C "$WT" push -q -u origin fix/T 2>/dev/null
+  local sha out; sha="$(teammate_pushes)"
+  printf 'fix/T\t#7\tmerged\thttps://x/7\t%s\n' "$sha" > "$HOME/prs"
+  out="$(remove_with_prs app fix T -b -r 2>&1)"
+  assert_eq "$?" 0
+  assert_eq "$(remote_branch fix/T)" "" "the forge keeps the PR's commits"
+  assert_contains "$(local_branch fix/T)" fix/T "local branch is not merged"
+}
+
+test_typed_ahead_keys_do_not_confirm_the_removal() {
+  make_repo "$HOME/src/app"
+  write_config <<EOF2
+[project me]
+repo_root = ~/src
+worktree_root = ~/wts
+EOF2
+  wt create app fix T main >/dev/null 2>&1
+  pty_start "WORKYTREE_PROMPT_INPUT=/dev/tty WORKYTREE_PROMPT_KEYS=1 ${(q)WT_BIN} remove; print -r -- \$? > ${(q)TMP_ROOT}/rc"
+  pty_wait "worktree to remove" 50
+  pty_send $'1\r2\r'
+  pty_wait "delete local branch" 50; sleep 0.5
+  assert_dir "$HOME/wts/app/fix/T" "nothing removed while the branch question waits"
+  pty_send n
+  pty_wait "Proceed?" 50; sleep 0.3
+  pty_send n
+  pty_finish 50
+  assert_eq "$(<$TMP_ROOT/rc)" 130
+  assert_dir "$HOME/wts/app/fix/T"
+  assert_contains "$(git -C "$HOME/src/app" branch --list fix/T)" fix/T
+}
+
+remove_as_branch_moves() {
+  ( setopt extendedglob
+    typeset -g WT_PROJECT_OPT='' WT_AI_RUNFILE=''; typeset -gi WT_YES=0 WT_CAN_CD=0
+    local f; for f in "$WT_TEST_ROOT"/lib/*.zsh "$WT_TEST_ROOT"/lib/cmd/*.zsh; do source "$f"; done
+    forge_pr_rows() { return 0; }
+    functions -c branch_verdict judge_branch
+    branch_verdict() {
+      judge_branch "$@"
+      local -i rc=$?
+      local verdict="$REPLY" moved
+      moved="$(git -C "$1" commit-tree -p "refs/heads/$2" -m moved "refs/heads/$2^{tree}")"
+      git -C "$1" update-ref "refs/heads/$2" "$moved" && print -r -- "$moved" > "$HOME/moved-to"
+      REPLY="$verdict"; return $rc
+    }
+    ui_init; config_load; cmd_remove "$@" ) < /dev/null
+}
+
+test_merged_branch_that_moves_after_the_verdict_is_kept() {
+  fixture
+  local out; out="$(remove_as_branch_moves app fix T -b 2>&1)"
+  assert_eq "$?" 0
+  local moved; moved="$(<$HOME/moved-to)"
+  assert_not_exists "$WT"
+  assert_eq "$(git -C "$HOME/src/app" rev-parse -q --verify refs/heads/fix/T)" "$moved" "branch kept at the new tip"
+  assert_contains "$out" "moved since it was checked"
+  assert_contains "$(git -C "$HOME/src/app" rev-list --all)" "$moved" "new commit still reachable"
+}
+
+test_confirmed_force_delete_spares_a_branch_that_moved_after_the_verdict() {
+  fixture; local sha; sha="$(commit_in_wt C)"
+  answers "y" "y" "n" ""        # delete local, force it, keep remote, proceed
+  local out; out="$(remove_as_branch_moves app fix T 2>&1)"
+  assert_eq "$?" 0
+  local moved; moved="$(<$HOME/moved-to)"
+  assert_contains "$out" "unmerged"
+  assert_not_exists "$WT"
+  assert_eq "$(git -C "$HOME/src/app" rev-parse -q --verify refs/heads/fix/T)" "$moved" "branch kept at the new tip"
+  assert_contains "$out" "moved since it was checked"
+  assert_contains "$(git -C "$HOME/src/app" rev-list --all)" "$sha" "the commits the user was shown survive too"
+}
+
+test_branch_force_flag_deletes_a_branch_that_moved_after_the_verdict() {
+  fixture; commit_in_wt C >/dev/null
+  answers "n" ""                # keep remote, proceed
+  local out; out="$(remove_as_branch_moves app fix T -B 2>&1)"
+  assert_eq "$?" 0
+  assert_eq "$(local_branch fix/T)" "" "-B deletes whatever is there"
+  assert_eq "${out//moved since it was checked/}" "$out" "no moved warning under -B"
 }
 
 run_tests

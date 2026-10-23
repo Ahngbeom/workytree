@@ -27,11 +27,10 @@ cmd_repo() {
       require_config
       # R16: never name a local `path` -- it silently destroys $PATH for the rest of this
       # scope (even `local path`), taking `git`/`find` with it. Use repo_path throughout.
-      local repo_path="" name="" project=""
+      local repo_path="" name="" project="$WT_PROJECT_OPT"
       while (( $# )); do
         case "$1" in
-          --name)    shift; name="${1:?--name requires a value}" ;;
-          --project) shift; project="${1:?--project requires a value}" ;;
+          --name)    shift; [[ -n "${1:-}" ]] || usage_error "--name requires a value"; name="$1" ;;
           -*)        usage_error "unknown flag: $1" ;;
           *)         [[ -z "$repo_path" ]] || usage_error "usage: workytree repo add <path> [--name n] [--project p]"; repo_path="$1" ;;
         esac; shift
