@@ -17,7 +17,11 @@ setup_env() {
   typeset -gA WT_PCFG=(me.repo_root "$HOME/src" me.worktree_root "$HOME/wts") WT_CFG=() WT_RCFG=()
   WT_PROJECT_OPT='' WT_COLOR=0
   _status_parse_opts
-  forge_pr_rows() { [[ -r "$HOME/prs" ]] && cat "$HOME/prs"; return 0; }
+  forge_pr_rows() {
+    [[ -n "${2:-}" && -r "$HOME/prs.all" ]] && cp "$HOME/prs.all" "$2.all"
+    [[ -n "${2:-}" && -e "$HOME/prs.truncated" ]] && : > "$2.truncated"
+    [[ -r "$HOME/prs" ]] && cat "$HOME/prs"; return 0
+  }
   functions[wt_fetch_origin]=$functions[_real_wt_fetch_origin]
   functions[remove_branch]=$functions[real_remove_branch]
   functions[remove_remote_branch]=$functions[real_remove_remote_branch]
@@ -176,6 +180,14 @@ test_backup_of_merged_ticket_is_in_the_safe_group() {
   assert_contains "$(group safe)" "backup/AB-1-pre-squash" safe-group
   assert_contains "$(group safe)" "backup of AB-1 (PR #3 merged)" note
   assert_eq "${$(plan_has safe backup/AB-1-pre-squash local)%%$'\t'*}" safe
+}
+
+test_incomplete_pr_list_drops_backup_to_force() {
+  backup_fixture
+  cp "$HOME/prs" "$HOME/prs.all"; : > "$HOME/prs.truncated"
+  delete_marked n
+  assert_contains "$(group force)" "backup of AB-1: PR list incomplete" note
+  assert_eq "$(plan_has safe backup/AB-1-pre-squash local)" MISSING not-safe
 }
 
 test_pr_lookup_failure_drops_backup_to_force() {

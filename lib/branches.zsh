@@ -51,13 +51,17 @@ branch_name_has_key() {
   [[ $name =~ "(^|[/_-])${key}([/_-]|\$)" ]]
 }
 
+# branch_ticket_pr <key> <pr_file>: REPLY = open|incomplete|merged|none for the PRs whose head
+# has the key, reply = their refs; rc 1 when pr_file is unreadable. Reads <pr_file>.all, every
+# PR, when it exists; <pr_file>.truncated means PRs may be missing, so no merge is proven.
 branch_ticket_pr() {
   setopt localoptions extendedglob
-  local key=$1 pr_file=$2 line
+  local key=$1 pr_file=$2 line src
   local -a f open_refs merged_refs
   reply=()
   REPLY=none
   [[ -r $pr_file ]] || return 1
+  src=$pr_file; [[ -r $pr_file.all ]] && src=$pr_file.all
   while IFS= read -r line; do
     f=("${(@ps:\t:)line}")
     branch_name_has_key "${f[1]}" "$key" || continue
@@ -65,8 +69,9 @@ branch_ticket_pr() {
       open|draft) open_refs+=("${f[2]}") ;;
       merged) merged_refs+=("${f[2]}") ;;
     esac
-  done < "$pr_file"
+  done < "$src"
   if (( ${#open_refs} )); then REPLY=open; reply=("${open_refs[@]}")
+  elif [[ -e $pr_file.truncated ]]; then REPLY=incomplete
   elif (( ${#merged_refs} )); then REPLY=merged; reply=("${merged_refs[@]}")
   fi
   return 0
@@ -260,6 +265,7 @@ status_collect_branches() {
         case $bk_state in
           open) note="backup of $key: PR $bk_refs open" ;;
           none) note="backup of $key: no merged PR" ;;
+          incomplete) note="backup of $key: PR list incomplete" ;;
           skipped) note="backup of $key: PR lookup skipped" ;;
           *)
             case $why in

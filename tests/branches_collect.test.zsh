@@ -226,6 +226,17 @@ test_unproven_backups_stay_unmerged() {
   assert_eq "$(bf $b 17)" "backup of AB-1: PR lookup skipped" skipped-note
   collect "$HOME/no-such-file"
   assert_eq "$(bf $b 17)" "backup of AB-1: PR lookup skipped" missing-file-note
+  print -r -- $'fix/AB-1\t!5\tmerged\tu\tdead' > "$HOME/prs"
+  print -r -- $'fix/AB-1\t!2\topen\tu\tbeef\t2026-01-01\nfix/AB-1\t!5\tmerged\tu\tdead\t2026-02-01' > "$HOME/prs.all"
+  collect "$HOME/prs"
+  assert_eq "$(bf $b 10)" unmerged hidden-open-why
+  assert_eq "$(bf $b 17)" "backup of AB-1: PR !2 open" hidden-open-note
+  print -r -- $'fix/AB-1\t!5\tmerged\tu\tdead\t2026-02-01' > "$HOME/prs.all"
+  : > "$HOME/prs.truncated"
+  collect "$HOME/prs"
+  assert_eq "$(bf $b 10)" unmerged truncated-why
+  assert_eq "$(bf $b 11)" force truncated-class
+  assert_eq "$(bf $b 17)" "backup of AB-1: PR list incomplete" truncated-note
 }
 
 test_base_head_checked_out_and_protected_are_handled() {

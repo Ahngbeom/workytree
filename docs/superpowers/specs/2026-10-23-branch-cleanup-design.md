@@ -129,7 +129,9 @@ base에 없는 커밋이 하나도 없는 원격(tip이 base에 있음: base 커
 - head 브랜치 이름에 그 키가 들어간 PR 중 `merged` 상태인 것이 있음
 - 그 키를 head에 가진 PR 중 열린 것이 없음
 
-티켓 브랜치가 ancestry로만 머지된 경우는 근거로 쓰지 않는다. 티켓 브랜치를 base로 되돌리거나 새로 만들면 커밋 없이도 `merged`가 되므로, 그 전에 떠 둔 백업이 유일한 사본일 수 있기 때문이다. 오프라인이거나 PR 조회 범위(GitHub 200건, GitLab 100건, 브랜치별 최신 PR만: `lib/forge.zsh:80-117`)를 넘으면 증명할 수 없고, 백업은 `stale`/`unmerged`로 남는다.
+티켓 브랜치가 ancestry로만 머지된 경우는 근거로 쓰지 않는다. 티켓 브랜치를 base로 되돌리거나 새로 만들면 커밋 없이도 `merged`가 되므로, 그 전에 떠 둔 백업이 유일한 사본일 수 있기 때문이다.
+
+"열린 것이 없음"은 완전한 목록으로만 증명한다. 두 조건은 브랜치별 최신 PR이 아니라 조회한 PR 전부(`forge_pr_rows <repo> <prefix>`가 쓰는 `<prefix>.all`)로 본다. 같은 head에서 나중에 머지된 PR이 오래된 열린 PR을 가리지 않게 하기 위해서다. 조회 결과가 한도(GitHub 200건, GitLab 100건)를 채우면 더 오래된 PR이 빠졌을 수 있으므로 `<prefix>.truncated`를 남기고, 그때는 열린 PR이 보이지 않는 한 판정을 `incomplete`(근거 `backup of <KEY>: PR list incomplete`)로 두어 머지를 증명하지 않는다. 오프라인이거나 조회가 실패해도 증명할 수 없다. 증명하지 못한 백업은 `stale`/`unmerged`로 남는다.
 
 ## 워크트리 목록의 ✓ 정정
 
@@ -178,7 +180,7 @@ fzf 최소 버전은 0.38(`lib/cmd/status.zsh:7`)이다. 0.38에는 `transform`(
 - 같은 키가 모드마다 다르게 동작하려면 바인딩 명령이 현재 모드를 알아야 한다(모드 상태 파일, `--header-lines`를 `reload`로 교체, 또는 `become`으로 fzf 재실행 등)
 - `enter`를 모드에 따라 다르게 하려면 위와 같은 방법이 필요하다
 
-상세 창은 로컬·원격 각각의 sha, 최근 커밋 5개, 작성자, PR, 백업 이름이면 키와 그 키의 PR 판정(`PR !5 merged`, `PR !5 open`, `no merged PR`, `PR lookup skipped`)을 보여 준다. 상세 창은 네트워크를 쓰지 않는다.
+상세 창은 로컬·원격 각각의 sha, 최근 커밋 5개, 작성자, PR, 백업 이름이면 키와 그 키의 PR 판정(`PR !5 merged`, `PR !5 open`, `no merged PR`, `PR list incomplete`, `PR lookup skipped`)을 보여 준다. 상세 창은 네트워크를 쓰지 않는다.
 
 `ctrl-s`의 "safe 행만"은 표시 줄 끝의 등급 단어로 정확히 거른다. fuzzy 검색어 `safe`는 `stale … force`처럼 글자가 흩어진 줄도 맞추기 때문이다.
 

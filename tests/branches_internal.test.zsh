@@ -50,6 +50,12 @@ test_ticket_pr_state() {
   branch_ticket_pr mpt-4 "$HOME/prs"; assert_eq "$REPLY ${reply[1]}" "open !4" draft-counts-as-open
   branch_ticket_pr mpt-3 "$HOME/prs"; assert_eq "$REPLY" none
   branch_ticket_pr mpt-1 "$HOME/missing"; assert_eq $? 1 lookup-skipped
+  print -r -- $'fix/mpt-1\t!6\topen\tu\ts6\nfix/mpt-1\t!1\tmerged\tu\ts1' > "$HOME/prs.all"
+  branch_ticket_pr mpt-1 "$HOME/prs"; assert_eq "$REPLY ${reply[1]}" "open !6" open-behind-newer-merged
+  cp "$HOME/prs" "$HOME/prs.all"
+  : > "$HOME/prs.truncated"
+  branch_ticket_pr mpt-1 "$HOME/prs"; assert_eq "$REPLY" incomplete truncated-listing
+  branch_ticket_pr mpt-2 "$HOME/prs"; assert_eq "$REPLY ${reply[1]}" "open !3" truncated-open-still-open
 }
 
 test_owner_and_pushed() {

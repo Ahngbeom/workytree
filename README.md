@@ -194,7 +194,7 @@ fzf 0.38 이상이 있고 양쪽이 터미널이면 상세 창이 있는 fzf 목
 |---|---|---|
 | `merged` | base에 병합됐거나 PR/MR이 그 커밋 그대로 병합됨 | safe |
 | `pushed` | 로컬만 지움. 남겨 둘 `origin` 브랜치에 로컬 커밋이 모두 있음 | safe |
-| `backup` | 백업 이름(`backup/*`, `*-backup`, `*-backup-*`, `*-before-*`)이고, 이름의 티켓 키를 head에 가진 PR 중 병합된 것이 있고 열린 것이 없음. 백업에만 있는 커밋도 함께 지움 | safe |
+| `backup` | 백업 이름(`backup/*`, `*-backup`, `*-backup-*`, `*-before-*`)이고, 이름의 티켓 키를 head에 가진 PR 중 병합된 것이 있고 열린 것이 없음. PR 목록이 조회 한도(GitHub 200건, GitLab 100건)를 채워 오래된 PR이 빠졌을 수 있으면 증명하지 않음. 백업에만 있는 커밋도 함께 지움 | safe |
 | `gone`, `stale`, `unmerged` | 병합이 증명되지 않음 | needs force |
 | `read-only`, `protected` | 동료 원격이나 PR이 열린 원격, `main`·`master`·`develop`·`release/*` | 지우지 않음 |
 

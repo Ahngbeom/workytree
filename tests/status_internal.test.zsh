@@ -136,6 +136,20 @@ test_unique_repos_keys_unreadable_lines_by_path() {
     _status_unique_repos "$two" | cut -f1 | tr '\n' ' ')" "a x " multi-line-answer
 }
 
+test_collect_one_gives_the_forge_a_prefix() {
+  make_repo "$HOME/src/app"
+  git -C "$HOME/src/app" switch -q -c backup/AB-1-pre
+  git -C "$HOME/src/app" commit -q --allow-empty -m b
+  git -C "$HOME/src/app" switch -q main
+  forge_pr_rows() { [[ -n "${2:-}" ]] && : > "$2.truncated"; print -r -- $'fix/AB-1\t!5\tmerged\tu\tdead'; }
+  ST_BRANCHES=1 ST_OFFLINE=0 ST_FETCH=0
+  _status_collect_one app me "$HOME/src/app" 30 "$HOME/out"
+  assert_contains "$(<"$HOME/out.rows")" "backup of AB-1: PR list incomplete"
+  ST_BRANCHES=0
+  # unfunction would delete the real forge_pr_rows for every later test in this file.
+  source "$WT_TEST_ROOT/lib/forge.zsh"
+}
+
 # More repos than WT_STATUS_MAX_JOBS run in batches; output stays in config order.
 test_collect_keeps_config_order_across_batches() {
   local n

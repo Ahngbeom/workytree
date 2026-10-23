@@ -95,7 +95,7 @@ _status_collect_one() {
     if (( ST_FETCH )); then
       wt_fetch_origin "$rp" >/dev/null 2>&1 || print -u2 -r -- "could not fetch origin; showing local refs"
     fi
-    (( ST_OFFLINE )) || forge_pr_rows "$rp" > "$out.prs"
+    (( ST_OFFLINE )) || forge_pr_rows "$rp" "$out.prs" > "$out.prs"
     if (( ST_BRANCHES )); then
       status_collect_branches "$project" "$name" "$rp" "$days" "$out.prs" > "$out.rows"
     else

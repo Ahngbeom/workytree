@@ -275,7 +275,7 @@ _branches_plan() {
     fi
     prs=''
     : > "$tmp/$i.err"
-    if (( ! ST_OFFLINE )) && forge_pr_rows "$rp" > "$tmp/$i.prs" 2>> "$tmp/$i.err"; then prs="$tmp/$i.prs"; fi
+    if (( ! ST_OFFLINE )) && forge_pr_rows "$rp" "$tmp/$i.prs" > "$tmp/$i.prs" 2>> "$tmp/$i.err"; then prs="$tmp/$i.prs"; fi
     (( ${+days_of[${project[$rp]}]} )) || days_of[${project[$rp]}]="$(status_stale_days "${project[$rp]}")"
     days="${days_of[${project[$rp]}]}"
     for line in ${(f)"$(status_collect_branches "${project[$rp]}" "${BR_REPO_NAME[$rp]}" "$rp" "$days" ${prs:+"$prs"} 2>> "$tmp/$i.err")"}; do
