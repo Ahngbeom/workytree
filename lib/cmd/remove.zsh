@@ -2,8 +2,9 @@
 # worktree using it is already gone. REPLY = the short sha the branch pointed at. A forced delete
 # with expect_sha keeps a branch that has moved off it.
 remove_branch() {
-  local repo_path="$1" branch="$2" force="$3" expect_sha="${4:-}" flag='-d' out
+  local repo_path="$1" branch="$2" force="$3" expect_sha="${4:-}" flag='-d' out full
   (( force )) && flag='-D'
+  full="$(git -C "$repo_path" rev-parse -q --verify "refs/heads/$branch" 2>/dev/null)"
   REPLY="$(git -C "$repo_path" rev-parse --short "refs/heads/$branch" 2>/dev/null)"
   if (( force )) && [[ -n "$expect_sha" ]] \
      && [[ "$(git -C "$repo_path" rev-parse -q --verify "refs/heads/$branch" 2>/dev/null)" != "$expect_sha" ]]; then
@@ -12,6 +13,7 @@ remove_branch() {
     return 1
   fi
   if out="$(git -C "$repo_path" branch "$flag" "$branch" 2>&1)"; then
+    wt_deletion_log "$repo_path" "refs/heads/$branch" "$full" "git -C ${(q)repo_path} branch ${(q)branch} $full"
     success "deleted branch $branch (was $REPLY)"
     hint "restore it with: git -C ${(q)repo_path} branch ${(q)branch} ${(q)REPLY}"
     return 0
@@ -54,6 +56,7 @@ remove_remote_branch() {
   local repo_path="$1" remote="$2" rbranch="$3" sha="$4" out
   REPLY="$(git -C "$repo_path" rev-parse --short "$sha" 2>/dev/null)"
   if out="$(wt_git_remote "$repo_path" push --force-with-lease="refs/heads/${rbranch}:${sha}" "$remote" --delete "$rbranch" 2>&1)"; then
+    wt_deletion_log "$repo_path" "refs/remotes/$remote/$rbranch" "$sha" "git -C ${(q)repo_path} push ${(q)remote} ${sha}:refs/heads/${(q)rbranch}"
     success "deleted remote branch $remote/$rbranch (was $REPLY)"
     hint "restore it with: git -C ${(q)repo_path} push ${(q)remote} ${(q)REPLY}:refs/heads/${(q)rbranch}"
     return 0

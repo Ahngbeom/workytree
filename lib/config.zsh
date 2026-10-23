@@ -19,6 +19,8 @@
 # run against absent/empty config data (`__complete`, `config path`, `config edit`, `help`,
 # `--version`) don't need to check it at all -- reset-to-empty already gives them the
 # "produce nothing, don't crash" behavior they want.
+zmodload zsh/datetime
+
 typeset -g  WT_CONFIG_FILE=""
 typeset -gi WT_CONFIG_EXISTS=0
 typeset -g  WT_CONFIG_LOAD_ERROR=""
@@ -27,6 +29,21 @@ typeset -ga WT_PROJECTS WT_REPOS WT_AGENTS
 
 config_file_path() {
   print -r -- "${WORKYTREE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/workytree/config}"
+}
+
+wt_state_dir() {
+  print -r -- "${XDG_STATE_HOME:-$HOME/.local/state}/workytree"
+}
+
+# wt_deletion_log <repo_path> <ref> <full_sha> <restore_cmd>: appends one tab-separated line to
+# deleted.log. A write failure only warns; the deletion it records has already happened.
+wt_deletion_log() {
+  local dir t; dir="$(wt_state_dir)"
+  t="$(strftime '%Y-%m-%dT%H:%M:%S%z' $EPOCHSECONDS)"; t="${t[1,-3]}:${t[-2,-1]}"
+  if ! { mkdir -p "$dir" && print -r -- "$t"$'\t'"$1"$'\t'"$2"$'\t'"$3"$'\t'"$4" >> "$dir/deleted.log"; } 2>/dev/null; then
+    warn "could not write the deletion log: $dir/deleted.log"
+  fi
+  return 0
 }
 
 # expand_path <p>: "~/x" and "$VAR"/"${VAR}" expansion; trailing slash removed. Each "$VAR" is

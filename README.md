@@ -207,6 +207,7 @@ wt config set project.work.stale_days 60     # 한 프로젝트
 - `-b`만 줘도 원격 브랜치가 있으면 요약에 `remote branch  kept` 행이 나온다
 - 워크트리에 ticket 브랜치가 아닌 브랜치가 체크아웃돼 있으면 `-b`/`-B`/`-r`은 아무것도 지우지 않고 종료 코드 1로 멈춘다
 - 브랜치를 지우면 지우기 전 커밋을 `(was <sha>)`로 보여 주고, 되살리는 명령을 `hint:`로 알려 준다
+- 지운 브랜치는 `~/.local/state/workytree/deleted.log`(`XDG_STATE_HOME`)에 시각·repo·ref·sha·복구 명령으로 남는다. 다른 ref에 없는 커밋은 git gc 유예(기본 2주)가 지나면 되살릴 수 없다
 - 지금 있는 워크트리를 지우면 `--to`가 없는 한 원본 repo로 이동
 - 브랜치 삭제가 실패해도 종료 코드는 0이고 요약에 ✗ 행으로 남는다. 그 시점에 워크트리는 이미 지워진 상태
 - 원격 브랜치 삭제는 자격 증명을 묻지 않는다. 자격 증명이 없으면 ✗ 행과 힌트로 끝난다
@@ -330,6 +331,7 @@ teammate_mode   = auto,tmux,iterm2,in-process
 |---|---|
 | `WORKYTREE_CONFIG` | 설정 파일 경로 |
 | `XDG_CONFIG_HOME` | 기본 설정 위치(`$XDG_CONFIG_HOME/workytree/config`) |
+| `XDG_STATE_HOME` | 삭제 로그 위치(`$XDG_STATE_HOME/workytree/deleted.log`, 기본 `~/.local/state`) |
 | `NO_COLOR` | 색 끄기, `--no-color`와 같음 |
 | `VISUAL`, `EDITOR` | `config edit`가 여는 편집기 |
 | `WORKYTREE_ALIAS=0` | `wt` 함수를 만들지 않음 |

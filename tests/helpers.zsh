@@ -20,6 +20,7 @@ setup_env() {
   TMP_ROOT="${$(mktemp -d):A}"
   export HOME="$TMP_ROOT/home"
   export XDG_CONFIG_HOME="$HOME/.config"
+  export XDG_STATE_HOME="$HOME/.local/state"
   mkdir -p "$HOME" "$XDG_CONFIG_HOME"
   export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
   export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
