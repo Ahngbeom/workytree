@@ -597,4 +597,27 @@ EOF
   assert_exit 1 wt __ai-configured
 }
 
+test_no_ai_flag_writes_nothing_and_says_nothing() {
+  cli_fixture; fake_agent fakeagent; wt config set ai_agent fakeagent >/dev/null
+  wt config set ai_session always >/dev/null
+  local rf="$TMP_ROOT/runfile" out; : > "$rf"
+  out="$(WORKYTREE_AI_RUNFILE="$rf" wt create app fix PROJ-1 main --no-ai -y 2>&1)"
+  assert_eq "$(<"$rf")" ""
+  assert_eq "${out#*ai session}" "$out"
+  assert_eq "${out##*$'\n'}" "$HOME/wts/app/fix/PROJ-1"
+}
+
+test_no_agent_found_warns() {
+  write_config <<'EOF'
+[project w]
+repo_root = ~/a
+worktree_root = ~/b
+EOF
+  config_load
+  local -a WT_AI_PROBE_ORDER=(wt-absent-a wt-absent-b)
+  local WT_AI_RUNFILE="$TMP_ROOT/runfile"
+  assert_eq "$(ai_maybe_offer w 1 0 2>&1)" \
+    "ai session skipped: no AI agent found on PATH (looked for wt-absent-a, wt-absent-b)"
+}
+
 run_tests

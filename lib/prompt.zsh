@@ -2,11 +2,17 @@
 # written to /dev/tty (or stderr under WORKYTREE_PROMPT_INPUT) so $(...) capture of stdout stays clean.
 typeset -gi WT_PROMPT_FD=-1
 
-prompt_available() {
+prompt_tty() {
   [[ -n "${WORKYTREE_PROMPT_INPUT:-}" ]] && return 0
-  (( WT_YES )) && return 1
   [[ -t 0 ]] || return 1
   { : < /dev/tty; } 2>/dev/null
+}
+prompt_available() { (( ! ${WT_YES:-0} )) && prompt_tty; }
+prompt_blocker() { if (( ${WT_YES:-0} )); then print -r -- --yes; else print -r -- 'no terminal'; fi; }
+# Through the wrapper, stdout is its capture pipe: only the mode says a terminal is behind it.
+prompt_screen() {
+  prompt_available || return 1
+  [[ "${WT_SHELL:-}" == terminal ]] || [[ -z "${WT_SHELL:-}" && -t 1 ]]
 }
 
 _prompt_open() {

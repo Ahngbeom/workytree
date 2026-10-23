@@ -283,11 +283,11 @@ cmd_status() {
   _status_parse_opts "$@"
   local notes_file records
   local -i interactive=0 rc
-  if (( ! ST_JSON && ! ST_PLAIN )) && [[ -t 0 ]] && { [[ -t 1 ]] || (( WT_CAN_CD )); }; then
+  if (( ! ST_JSON && ! ST_PLAIN )) && prompt_screen; then
     _status_fzf_ok && interactive=1
   fi
-  # The wrapper captures stdout to find a cd target, but it still lands on the terminal.
-  (( interactive || WT_CAN_CD )) && ui_init force
+  # In terminal mode the wrapper captures stdout to find a cd target, but it still lands on the terminal.
+  if (( interactive )) || [[ "$WT_SHELL" == terminal ]]; then ui_init force; fi
   [[ -t 2 ]] && ST_PROGRESS=1
   notes_file="$(mktemp 2>/dev/null)" || die "could not create a temp file"
   records="$(_status_records "$notes_file")" || { rc=$?; rm -f "$notes_file"; exit $rc; }
@@ -454,7 +454,7 @@ cmd___status-action() {
   case "$action" in
     remove)
       if [[ "${f[1]}" == worktree && "${f[6]}" != - ]]; then
-        ( WT_PROJECT_OPT="${f[2]}"; cmd_remove "${f[3]}" "${f[6]}" "${f[7]}" )
+        ( WT_PROJECT_OPT="${f[2]}"; builtin cd -- "${f[4]}" 2>/dev/null; cmd_remove "${f[3]}" "${f[6]}" "${f[7]}" )
       else
         warn "only worktrees under worktree_root can be removed from here"
         [[ "${f[1]}" == branch ]] && hint "delete the branch yourself: git -C ${(q)f[4]} branch -d ${(q)f[8]}"

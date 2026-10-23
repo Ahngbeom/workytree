@@ -528,7 +528,7 @@ EOF2
 
 remove_as_branch_moves() {
   ( setopt extendedglob
-    typeset -g WT_PROJECT_OPT='' WT_AI_RUNFILE=''; typeset -gi WT_YES=1 WT_CAN_CD=0
+    typeset -g WT_PROJECT_OPT='' WT_AI_RUNFILE=''; typeset -gi WT_YES=0 WT_CAN_CD=0
     local f; for f in "$WT_TEST_ROOT"/lib/*.zsh "$WT_TEST_ROOT"/lib/cmd/*.zsh; do source "$f"; done
     forge_pr_rows() { return 0; }
     functions -c branch_verdict judge_branch

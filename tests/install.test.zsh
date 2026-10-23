@@ -80,4 +80,17 @@ test_install_leaves_unrelated_mention_of_path_byte_identical() {
   assert_eq "$(ls "$HOME"/.zshrc.bak-* | wc -l | tr -d ' ')" "1"
 }
 
+# The installer runs the CLI once, so a platform whose env(1) lacks -S fails at install time
+# with a reason instead of at the first `wt create`.
+test_install_refuses_a_cli_that_does_not_start() {
+  mkdir -p "$HOME/inst/bin" "$HOME/inst/lib" "$HOME/inst/shell"
+  printf '#!/bin/sh\nexit 1\n' > "$HOME/inst/bin/workytree"; chmod +x "$HOME/inst/bin/workytree"
+  print '# existing' > "$HOME/.zshrc"
+  local out rc
+  out="$(WORKYTREE_INSTALL_DIR="$HOME/inst" sh "$WT_TEST_ROOT/install.sh" 2>&1)"; rc=$?
+  assert_eq "$rc" 1
+  assert_contains "$out" "does not start"
+  assert_contains "$out" "env -S"
+  assert_eq "$(<"$HOME/.zshrc")" "# existing" ".zshrc untouched"
+}
 run_tests

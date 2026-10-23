@@ -184,17 +184,13 @@ test_create_relays_info_lines() {
   assert_contains "$out" "result: created"
 }
 
-# R23/Finding 4: `cmd_cd` is currently a literal alias for `cmd_path` (lib/cmd/path.zsh),
-# so testing through the real CLI cannot distinguish "the wrapper translated cd -> path" from
-# "it didn't bother, and cd/path happen to produce the same output anyway". Stub out
-# $WORKYTREE_BIN with a spy that records its own $1 so the wrapper's translation is verified
-# directly, independent of that CLI coincidence.
-test_cd_translates_to_path_subcommand() {
+# `cd` reaches the CLI as `cd`: cmd_cd checks that the target exists, cmd_path does not.
+test_cd_reaches_the_cli_as_cd() {
   fixture
   local stub="$TMP_ROOT/stub-workytree" log="$TMP_ROOT/stub.log"
   cat > "$stub" <<'SCRIPT'
 #!/usr/bin/env zsh
-print -r -- "$1" > "$WT_STUB_LOG"
+print -r -- "$1 $WORKYTREE_SHELL" > "$WT_STUB_LOG"
 print -r -- "/stub/target/path"
 SCRIPT
   chmod +x "$stub"
@@ -204,76 +200,50 @@ SCRIPT
     WORKYTREE_BIN='$stub'
     workytree cd app fix T >/dev/null
   "
-  assert_eq "$(cat "$log")" "path"
+  assert_eq "$(cat "$log")" "cd script"
 }
 
-# fake_claude: a fake agent placed on PATH. When run, it prints its own cwd and args -- this
-# is how we confirm the wrapper cd's *first* and only then runs it.
-fake_claude() {
-  mkdir -p "$HOME/fakebin"
-  cat > "$HOME/fakebin/claude" <<'EOF'
-#!/bin/sh
-echo "AGENT-RAN pwd=$PWD args=$*"
-EOF
-  chmod +x "$HOME/fakebin/claude"
-  export PATH="$HOME/fakebin:$PATH"
+# fake_agent [exit-code]: $HOME/bin/fakeagent, configured as ai_agent. It reports its cwd,
+# whether its stdin is a terminal, and each argument on its own ARG: line. Never a real agent
+# name: bin/workytree puts /opt/homebrew/bin and /usr/local/bin ahead of $HOME/bin.
+fake_agent() {
+  mkdir -p "$HOME/bin"
+  printf '#!/bin/sh\n[ -t 0 ] && t=1 || t=0\necho "AGENT-RAN pwd=$PWD tty=$t"\nfor a in "$@"; do printf "ARG:%%s\\n" "$a"; done\nexit %s\n' \
+    "${1:-0}" > "$HOME/bin/fakeagent"
+  chmod +x "$HOME/bin/fakeagent"
+  export PATH="$HOME/bin:$PATH"
+  wt config set ai_agent fakeagent >/dev/null
 }
 
 test_create_ai_runs_the_agent_inside_the_new_worktree() {
-  fixture; fake_claude
-  local out
-  out="$(zsh_i 'wt create app fix PROJ-1 main --ai -y')"
-  assert_contains "$out" "AGENT-RAN"
-  assert_contains "$out" "pwd=$HOME/wts/app/fix/PROJ-1"
+  fixture; fake_agent
+  assert_contains "$(pty_run 'wt create app fix PROJ-1 main --ai -y')" \
+    "AGENT-RAN pwd=$HOME/wts/app/fix/PROJ-1 tty=1"
 }
 
 test_create_without_ai_runs_nothing() {
-  fixture; fake_claude
-  local out
-  out="$(zsh_i 'wt create app fix PROJ-1 main -y')"
+  fixture; fake_agent
+  local out; out="$(pty_run 'wt create app fix PROJ-1 main -y')"
   assert_eq "${out#*AGENT-RAN}" "$out" "no --ai, no agent"
-  # Two separate checks, not one "cd: $target" substring: `print -P "%F{70}cd:%f $target"`
-  # puts a color-reset escape between "cd:" and the space+path, so the literal adjacent
-  # string only appears when the terminal is reported as colorless. Checking "cd:" and the
-  # path independently verifies the ordinary auto-cd still ran without depending on that.
-  assert_contains "$out" "cd:"
   assert_contains "$out" "$HOME/wts/app/fix/PROJ-1"
 }
 
 test_agent_exit_code_does_not_fail_create() {
-  fixture
-  mkdir -p "$HOME/fakebin"
-  print -r -- '#!/bin/sh' > "$HOME/fakebin/claude"
-  print -r -- 'exit 3'   >> "$HOME/fakebin/claude"
-  chmod +x "$HOME/fakebin/claude"
-  export PATH="$HOME/fakebin:$PATH"
-  local out
-  out="$(zsh_i 'wt create app fix PROJ-1 main --ai -y; echo "rc=$?"')"
+  fixture; fake_agent 3
+  local out; out="$(pty_run 'wt create app fix PROJ-1 main --ai -y; echo "rc=$?"')"
+  assert_contains "$out" "AGENT-RAN"
   assert_contains "$out" "rc=0" "the worktree was created; the agent's own exit is not create's"
 }
 
-# TMPDIR is exported to the test's own TMP_ROOT (not left as the shared ${TMPDIR:-/tmp})
-# so the wrapper's mktemp lands there too -- otherwise a concurrent test run's own
-# workytree-ai.* files in the shared system tmp dir could make this count nonzero for
-# reasons unrelated to this test.
 test_runfile_is_removed_after_the_run() {
-  fixture; fake_claude
+  fixture; fake_agent
+  mkdir -p "$HOME/wts/app/fix/EX"
   local out
-  out="$(zsh_i 'wt create app fix PROJ-1 main --ai -y; ls "${TMPDIR:-/tmp}" | grep -c "^workytree-ai\." || true')"
+  out="$(pty_run 'wt create app fix PROJ-1 main --ai -y; wt create app fix EX main --ai -y; print -r -- "LEFT=$(ls "$TMPDIR" | grep -c "^workytree-ai\.")"')"
   assert_contains "$out" "AGENT-RAN"
-  assert_eq "${out##*$'\n'}" "0" "no runfile left behind"
+  assert_contains "$out" "LEFT=0" "no runfile left after a run or a failed create"
 }
 
-# Fix round 1, Finding 1: the pre-fix trap was `trap 'command rm -f -- "$runfile"' EXIT`
-# (single quotes) -- $runfile is expanded only when the trap FIRES, which is after this
-# function has already returned and its `local runfile` has gone out of scope. So the trap
-# ran `rm -f --` with an empty argument and deleted nothing. The only thing that ever
-# actually cleaned up was the explicit `rm -f` right before the agent runs, which is only
-# reached when --ai fires interactively -- test_runfile_is_removed_after_the_run above
-# exercises exactly that path, so it never caught this. An ordinary `create` with no `--ai`
-# still mktemps a runfile (the wrapper can't know in advance whether the CLI will use it)
-# but never writes or removes it via that explicit rm, so cleanup depends entirely on the
-# trap. TMPDIR isolation comes from zsh_i, see its comment.
 test_runfile_is_removed_without_ai() {
   fixture
   local out
@@ -281,71 +251,94 @@ test_runfile_is_removed_without_ai() {
   assert_eq "${out##*$'\n'}" "0" "no runfile left behind on a plain create without --ai"
 }
 
-# fake_claude_argv: like fake_claude, but echoes each argv element it received on its own
-# line, prefixed so the assertions below can pick just those lines out of the rest of the
-# session's output. Needed to check argv elements individually (order, and whether an
-# embedded space survived as ONE element) -- fake_claude's single `args=$*` line collapses
-# that distinction.
-fake_claude_argv() {
-  mkdir -p "$HOME/fakebin"
-  cat > "$HOME/fakebin/claude" <<'EOF'
-#!/bin/sh
-echo "AGENT-RAN"
-for a in "$@"; do
-  printf 'ARG:%s\n' "$a"
-done
-EOF
-  chmod +x "$HOME/fakebin/claude"
-  export PATH="$HOME/fakebin:$PATH"
-}
-
-# Fix round 1, Finding 2: every other test in this file produces a single-word runfile
-# ("claude"), so the ${(f)}-into-array reconstruction in shell/workytree.zsh -- the entire
-# basis for the "no eval" safety claim -- is never actually exercised past one element. This
-# test drives a real multi-element argv through config (an [agent claude] `command` override,
-# since the interview needs a real tty that the test runner doesn't have) -> ai_build_argv ->
-# the runfile -> the wrapper's ${(f)} split, and checks the fake agent received all of it
-# intact, in order, unsplit on internal whitespace.
-#
-# Fix round 2, Finding 2/6: this used to read `hello\ there` (backslash-escaped space), with a
-# comment here claiming `${(z)cmd}` was what turned the escaped space into one literal-space
-# word. Measured directly: `${(z)}` alone leaves that token as the literal TWELVE characters
-# `hello\ there`, backslash included -- it was the old, unqualified `print -l` at
-# serialization that silently ate the backslash as an "unrecognized" escape, giving the right
-# answer for the wrong reason, while a genuine escape like `\n` in the same position was
-# turned into a real newline and split into an extra argv element (see agent.zsh's argv test
-# for that fix, `print -rl`). A double-quoted value exercises the mechanism this test is
-# actually meant to cover: `${(z)}` alone leaves quote characters IN the word (verified:
-# `${(z)}` on `"hello there"` keeps the literal string `"hello there"`, quotes and all);
-# `${(Q)}`, applied after `${(z)}` in ai_build_argv, is what strips them and collapses it into
-# one clean argument.
+# The argv goes config -> ai_build_argv -> runfile -> the wrapper's ${(f)} split; a quoted,
+# space-containing value must arrive as one argument without its quotes.
 test_multi_element_argv_survives_the_round_trip() {
-  make_repo "$HOME/src/app"
-  write_config <<'EOF'
-[project me]
-repo_root = ~/src
-worktree_root = ~/wts
+  fixture; fake_agent
+  cat >> "$XDG_CONFIG_HOME/workytree/config" <<'EOF'
 
-[agent claude]
-command = claude --bare "hello there" --flag
+[agent fakeagent]
+command = fakeagent --bare "hello there" --flag
 EOF
-  fake_claude_argv
-  local out
-  out="$(zsh_i 'wt create app fix PROJ-1 main --ai -y')"
-  assert_contains "$out" "AGENT-RAN"
-  local -a lines args
-  lines=( "${(f)out}" )
-  local l
-  for l in "${lines[@]}"; do
-    [[ "$l" == ARG:* ]] && args+=( "${l#ARG:}" )
-  done
-  assert_eq "${#args}" "3" "all three non-executable argv elements arrived"
+  local out; out="$(pty_run 'wt create app fix PROJ-1 main --ai -y')"
+  local -a args; args=( ${${(M)${(f)out}:#ARG:*}#ARG:} )
+  assert_eq "${#args}" "3" "all three arguments arrived"
   assert_eq "${args[1]}" "--bare"
-  assert_eq "${args[2]}" "hello there" "the quoted, space-containing element arrived as ONE argument with no quote characters"
+  assert_eq "${args[2]}" "hello there" "one argument, no quote characters"
   assert_eq "${args[3]}" "--flag"
 }
 
+test_configured_session_arms_the_channel_without_the_flag() {
+  fixture; fake_agent
+  wt config set ai_session always >/dev/null
+  assert_contains "$(pty_run 'wt create app fix PROJ-1 main -y')" "AGENT-RAN" "ai_session = always arms it with no flag"
+}
 
+# K2: the agent runs only in terminal mode with a terminal on stdin. Everywhere else it would
+# inherit a pipe, a file or the loop's input.
+test_agent_never_runs_where_it_cannot_attach_to_the_terminal() {
+  fixture; fake_agent
+  wt config set ai_session ask >/dev/null
+  local code
+  code="$(cat <<EOF
+x=\$(wt create app fix T2 main -y)
+wt create app fix T3 main -y | cat
+wt create app fix T4 main -y > ~/log
+wt create app fix T5 main -y < /dev/null
+printf 'T6\nT7\n' | while read t; do wt create app fix \$t main -y; done
+zsh -f -c "source '$SHELL_FILE'; wt create app fix T8 main -y"
+EOF
+)"
+  local out; out="$(pty_run "$code" 2>&1)"
+  assert_eq "${out#*AGENT-RAN}" "$out" "no agent outside terminal mode"
+  assert_eq "${out#*session here?}" "$out" "and no question"
+  assert_dir "$HOME/wts/app/fix/T7"
+}
+
+test_ai_skip_names_one_cause() {
+  fixture; fake_agent
+  local code
+  code="$(cat <<EOF
+wt create app fix S1 main --ai -y > /dev/null
+wt create app fix S2 main --ai -y < /dev/null
+TMPDIR=$HOME/no-such-dir wt create app fix S3 main --ai -y
+zsh -f -c "source '$SHELL_FILE'; wt create app fix S4 main --ai -y"
+$WT_BIN create app fix S5 main --ai -y
+EOF
+)"
+  local out; out="$(pty_run "$code")"
+  local -a lines; lines=( ${(M)${(f)out}:#*ai session skipped*} )
+  assert_eq "${#lines}" 5 "one line per create"
+  assert_contains "${lines[1]}" "output is redirected or captured"
+  assert_contains "${lines[2]}" "stdin is not a terminal"
+  assert_contains "${lines[3]}" "could not create a temp file in $HOME/no-such-dir"
+  assert_contains "${lines[4]}" "not an interactive shell"
+  assert_contains "${lines[5]}" "shell integration required"
+}
+
+test_ai_enabled_after_the_shell_started_says_so() {
+  fixture; fake_agent
+  local out; out="$(pty_run 'wt config set ai_session always 2>/dev/null; wt create app fix L1 main -y')"
+  assert_contains "$out" "ai session skipped: enabled after this shell started; open a new shell or pass --ai"
+  assert_eq "${out#*AGENT-RAN}" "$out"
+}
+
+test_no_ai_beats_always_and_ai() {
+  fixture; fake_agent
+  wt config set ai_session always >/dev/null
+  local out; out="$(pty_run 'wt create app fix N1 main -y --no-ai; wt create --ai app fix N2 main -y --no-ai')"
+  assert_eq "${out#*AGENT-RAN}" "$out" "--no-ai always wins"
+  assert_eq "${out#*ai session skipped}" "$out" "and says nothing"
+  assert_dir "$HOME/wts/app/fix/N2"
+}
+
+test_ask_with_yes_runs_without_asking() {
+  fixture; fake_agent
+  wt config set ai_session ask >/dev/null
+  local out; out="$(pty_run 'wt create app fix Y1 main -y')"
+  assert_contains "$out" "AGENT-RAN pwd=$HOME/wts/app/fix/Y1"
+  assert_eq "${out#*session here?}" "$out" "no question"
+}
 
 # A hook cannot be simulated after the fact -- it has to observe the file WHILE the CLI runs.
 # post-checkout fires inside `git worktree add`, exactly the window a real attack would use.
@@ -374,60 +367,41 @@ test_hook_cannot_find_a_runfile_when_sessions_are_not_configured() {
   assert_eq "${out#*HOOK-FOUND-RUNFILE}" "$out" "an unconfigured user's create never arms the channel"
 }
 
-# The wrapper decides whether to arm the channel by scanning the command line for --ai, and
-# that scan has to agree with the CLI's own parsing or the two disagree about whether this run
-# opted in. `--` ends option parsing for create (lib/cmd/create.zsh), so a literal --ai after
-# it is a repo name, not the flag.
-#
-# This exercises the scan directly rather than through a real `create`: a create whose repo
-# name is `--ai` fails before `git worktree add` ever runs, so the post-checkout probe used
-# above would have nothing to observe and would pass no matter what the wrapper decided.
+# The wrapper's --ai scan must agree with cmd_create: `--` ends create's flags, so a later
+# --ai is a positional. A stand-in CLI reports whether it was handed a runfile.
 test_ai_flag_scan_matches_the_cli_parsing() {
   fixture
+  stand_in '[ -n "$WORKYTREE_AI_RUNFILE" ] && s=ARMED || s="NOT-ARMED:$WORKYTREE_AI_SKIP"; echo "$* -> $s"'
   local out
-  out="$(zsh_i '
-    for a in "create app fix PROJ-1" "create --ai app fix" "create app fix PROJ-1 --ai" "create -- --ai fix" "create --ai -- x"; do
-      _workytree_has_ai_flag ${=a} && print "$a -> ARMED" || print "$a -> NOT-ARMED"
-    done')"
-  assert_contains "$out" "create app fix PROJ-1 -> NOT-ARMED"
+  out="$(pty_run "WORKYTREE_BIN=$HOME/stand-in
+    wt create app fix PROJ-1; wt create --ai app fix; wt create app fix PROJ-1 --ai
+    wt create -- --ai fix; wt create --ai -- x
+    wt create --no-ai app fix; wt create -- --no-ai fix; wt create --ai -- --no-ai")"
+  assert_contains "$out" "create app fix PROJ-1 -> NOT-ARMED:startup"
   assert_contains "$out" "create --ai app fix -> ARMED"
   assert_contains "$out" "create app fix PROJ-1 --ai -> ARMED"
-  assert_contains "$out" "create -- --ai fix -> NOT-ARMED" "-- makes a following --ai a positional"
+  assert_contains "$out" "create -- --ai fix -> NOT-ARMED:startup" "-- makes a following --ai a positional"
   assert_contains "$out" "create --ai -- x -> ARMED" "--ai before -- is still the flag"
-}
-
-test_ai_flag_arms_the_channel_even_when_config_says_nothing() {
-  fixture; fake_claude
-  local out
-  out="$(zsh_i 'wt create app fix PROJ-1 main --ai -y')"
-  assert_contains "$out" "AGENT-RAN" "--ai arms the channel on its own"
-}
-
-
-test_configured_session_arms_the_channel_without_the_flag() {
-  fixture; fake_claude
-  wt config set ai_session always >/dev/null
-  local out
-  out="$(zsh_i 'wt create app fix PROJ-1 main -y')"
-  assert_contains "$out" "AGENT-RAN" "ai_session = always arms it with no flag"
+  assert_contains "$out" "create --no-ai app fix -> NOT-ARMED:no-ai"
+  assert_contains "$out" "create -- --no-ai fix -> NOT-ARMED:startup"
+  assert_contains "$out" "create --ai -- --no-ai -> ARMED"
 }
 
 # status uses the same "last stdout line is a directory -> cd" contract as create/cd/remove.
 # The real CLI only prints a path after an fzf selection, so a stand-in binary plays that part
-# and reports whether the wrapper claimed the cd capability -- which it must not when its own
-# stdout is a pipe, as it is here.
+# and reports the mode: zsh_i's top level has a pipe on stdout, so redirected.
 test_status_output_last_line_is_a_cd_target() {
   fixture
   mkdir -p "$HOME/fakebin" "$HOME/target"
   cat > "$HOME/fakebin/wt-status" <<EOF
 #!/bin/sh
-echo "capable=[\${WORKYTREE_CD_CAPABLE:-}]"
+echo "mode=[\${WORKYTREE_SHELL:-}]"
 echo "$HOME/target"
 EOF
   chmod +x "$HOME/fakebin/wt-status"
   local out
   out="$(zsh_i "WORKYTREE_BIN='$HOME/fakebin/wt-status'; wt status; print -r -- \"pwd=\$PWD\"")"
-  assert_contains "$out" "capable=[]"
+  assert_contains "$out" "mode=[redirected]"
   assert_contains "$out" "pwd=$HOME/target"
 }
 
@@ -437,6 +411,209 @@ test_status_table_output_is_printed_without_cd() {
   out="$(zsh_i "cd '$HOME'; wt status --offline --plain; print -r -- \"pwd=\$PWD\"")"
   assert_contains "$out" "REPO"
   assert_contains "$out" "pwd=$HOME"
+}
+
+# The cd follows `-o interactive`, not the wrapper mode: a subshell or a group whose output is
+# piped or redirected is still a shell the user typed into, and `( wt cd x && make ) > log`
+# must run make in x.
+test_cd_follows_inside_subshells_and_piped_groups() {
+  fixture
+  wt create app fix A main -y >/dev/null 2>&1
+  local w="$HOME/wts/app/fix/A"
+  assert_eq "$(zsh_i 'cd ~; ( wt cd app fix A >/dev/null && pwd ); pwd')" "$w"$'\n'"$HOME" "( )"
+  assert_eq "$(zsh_i 'cd ~; ( wt cd app fix A && pwd ) > o; tail -1 o; pwd')" "$w"$'\n'"$HOME" "( ) > file"
+  assert_eq "$(zsh_i 'cd ~; { wt cd app fix A >/dev/null && pwd } | cat; pwd')" "$w"$'\n'"$HOME" "{ } | cat"
+  assert_eq "$(zsh_i 'cd ~; ( wt cd app fix A && pwd ) | tail -1; pwd')" "$w"$'\n'"$HOME" "( ) | pipe"
+}
+
+test_create_on_a_terminal_cds_and_announces_once() {
+  fixture
+  local out; local -a cd_lines
+  out="$(pty_run 'wt create app fix A main -y 2>/dev/null; print -r -- "PWD=$PWD"')"
+  cd_lines=( ${(M)${(f)out}:#*cd:*} )
+  assert_contains "$out" "PWD=$HOME/wts/app/fix/A"
+  assert_eq "${#cd_lines}" 1 "one cd: line"
+}
+
+# counting_install: a copy of the integration whose bin/workytree appends its first argument to
+# $HOME/cli.calls before running the real CLI. $HOME/.zshenv sources it, as a user who moved
+# the source line out of .zshrc would.
+counting_install() {
+  mkdir -p "$HOME/inst/shell" "$HOME/inst/bin"
+  cp "$SHELL_FILE" "$HOME/inst/shell/workytree.zsh"
+  print -r -- "#!/bin/sh
+echo \"\$1\" >> '$HOME/cli.calls'
+exec '$WT_BIN' \"\$@\"" > "$HOME/inst/bin/workytree"
+  chmod +x "$HOME/inst/bin/workytree"
+  print -r -- "source '$HOME/inst/shell/workytree.zsh'" > "$HOME/.zshenv"
+}
+
+test_sourcing_runs_the_cli_once_in_interactive_shells_and_never_otherwise() {
+  fixture; counting_install
+  assert_eq "$(ZDOTDIR="$HOME" zsh -d -c 'whence -w wt' 2>&1)" "wt: function" "non-interactive still gets wt"
+  assert_not_exists "$HOME/cli.calls"
+  ZDOTDIR="$HOME" zsh -d -i -c true >/dev/null 2>&1
+  assert_eq "$(<"$HOME/cli.calls")" "__shell-init"
+  assert_eq "$(WORKYTREE_ALIAS=0 ZDOTDIR="$HOME" zsh -d -c 'whence -w wt' 2>&1)" "wt: none"
+}
+
+test_broken_config_at_startup_prints_one_line_and_no_alias_advice() {
+  write_config <<'EOF'
+kinds = a
+kinds = b
+EOF
+  print -r -- "alias wt='echo mine'; source '$SHELL_FILE'" > "$HOME/.zshrc"
+  assert_eq "$(ZDOTDIR="$HOME" zsh -d -i -c wt 2>&1)" \
+    "workytree: config has errors; run 'workytree list' to see them"$'\n'"mine"
+}
+
+# K1: inside $(...) or a pipe the caller gets the bare path, never the "cd:" announcement.
+test_capture_and_pipes_get_the_bare_path() {
+  fixture
+  wt create app fix A main -y >/dev/null 2>&1
+  assert_eq "$(zsh_i 'x=$(wt cd app fix A); print -r -- "[$x]"')" "[$HOME/wts/app/fix/A]"
+  assert_eq "$(zsh_i 'wt create app fix B main -y 2>/dev/null | tail -1')" "$HOME/wts/app/fix/B"
+  assert_eq "$(zsh_i 'chpwd() { print CHPWD-RAN }; x=$(wt cd app fix A 2>/dev/null); print -r -- "[$x]"')" \
+    "[$HOME/wts/app/fix/A]" "a printing chpwd hook (nvm load-nvmrc, auto-ls) stays out of x=\$(wt cd ...)"
+  assert_contains "$(zsh_i 'chpwd() { print CHPWD-RAN }; wt cd app fix A')" "CHPWD-RAN" \
+    "the hook's output still reaches the user outside a capture"
+  stand_in 'rm -rf "$PWD"; echo ONLY'
+  assert_eq "$(zsh_i 'WORKYTREE_BIN=$HOME/stand-in; mkdir ~/gone; cd ~/gone; chpwd() { print CHPWD-RAN }; x=$(wt cd x 2>/dev/null); unfunction chpwd; print -r -- "[$x]"')" \
+    "[ONLY]" "the recovery cd keeps a printing hook out of the capture too"
+}
+
+test_terminal_cd_line_honours_no_color_and_dumb_terminals() {
+  fixture
+  wt create app fix A main -y >/dev/null 2>&1
+  local w="$HOME/wts/app/fix/A" out
+  assert_contains "$(pty_run 'wt cd app fix A')" $'\e[38;5;70mcd:\e[0m '"$w"
+  out="$(pty_run 'NO_COLOR=1 wt cd app fix A; wt --no-color cd app fix A; TERM=dumb wt cd app fix A')"
+  assert_eq "$out" "cd: $w"$'\n'"cd: $w"$'\n'"cd: $w"
+}
+
+test_wrapper_survives_caller_options_and_odd_ticket_names() {
+  fixture
+  local code
+  code="$(cat <<'EOF'
+export NO_COLOR=1
+setopt ksh_arrays sh_word_split posix_traps prompt_subst
+wt create app fix '50%d' main -y 2>/dev/null
+wt create app fix 'U$(id>PWNED)' main -y 2>/dev/null
+print -r -- "PWD=$PWD"
+wt cd app >/dev/null; print -r -- "PWD=$PWD"
+EOF
+)"
+  local out; out="$(pty_run "$code")"
+  assert_contains "$out" "cd: $HOME/wts/app/fix/50%d"
+  assert_contains "$out" "cd: $HOME/wts/app/fix/U\$(id>PWNED)"
+  assert_contains "$out" "PWD=$HOME/wts/app/fix/U\$(id>PWNED)"
+  assert_contains "$out" "PWD=$HOME/src/app"
+  assert_not_exists "$HOME/wts/app/fix/U\$(id>PWNED)/PWNED"
+}
+
+test_failure_replays_every_line_and_keeps_the_exit_code() {
+  fixture
+  mkdir -p "$HOME/src/app/.git/refs/heads/fix"; : > "$HOME/src/app/.git/refs/heads/fix/EX.lock"
+  assert_contains "$(zsh_i 'cd ~; wt create app fix EX main -y 2>/dev/null; print rc=$?; pwd')" \
+    "base ref: main"$'\n'"rc=1"$'\n'"$HOME"
+  assert_contains "$(zsh_i 'setopt err_return; cd ~; wt create app fix EX main -y 2>/dev/null || print rc=$?; pwd')" \
+    "base ref: main"$'\n'"rc=1"$'\n'"$HOME" "the replay survives the caller's err_return"
+}
+
+# Claude Code's shell snapshot keeps workytree() and wt() but drops `_`-prefixed helpers and
+# plain globals such as WORKYTREE_BIN.
+test_wrapper_works_from_a_shell_snapshot() {
+  fixture
+  zsh -f -c "source '$SHELL_FILE'; typeset -f workytree wt" > "$HOME/snap.zsh"
+  mkdir -p "$HOME/pbin"; ln -s "$WT_BIN" "$HOME/pbin/workytree"
+  local out
+  out="$(PATH="$HOME/pbin:$PATH" zsh -f -c "source '$HOME/snap.zsh'; wt --version; print rc=\$?; wt path app" 2>&1)"
+  assert_contains "$out" "workytree 0."
+  assert_contains "$out" "rc=0"
+  assert_contains "$out" "$HOME/src/app"
+  out="$(zsh -f -c "source '$HOME/snap.zsh'; path=(/usr/bin /bin); wt --version; print rc=\$?" 2>&1)"
+  assert_contains "$out" "workytree: not found on PATH"
+  assert_contains "$out" "rc=127"
+}
+
+# stand_in <body>: a fake bin/workytree for the wrapper to call; WORKYTREE_BIN points at it.
+stand_in() {
+  print -r -- "#!/bin/sh
+$1" > "$HOME/stand-in"
+  chmod +x "$HOME/stand-in"
+}
+
+# The mode is what the CLI decides ownership from (WT_CAN_CD, the K3 warning, fzf); the bare
+# path in a capture alone cannot tell captured from redirected.
+test_wrapper_sends_one_mode_per_context() {
+  fixture
+  stand_in 'echo "mode=$WORKYTREE_SHELL" >&2; echo "$HOME"'
+  local code out
+  local -a modes
+  code="$(cat <<EOF
+WORKYTREE_BIN=$HOME/stand-in
+wt cd x
+x=\$(wt cd x)
+wt cd x | cat
+wt cd x > /dev/null
+( wt cd x ) > /dev/null
+zsh -f -c "source '$SHELL_FILE'; WORKYTREE_BIN=$HOME/stand-in; wt cd x"
+EOF
+)"
+  out="$(pty_run "$code")"
+  modes=( ${(M)${(f)out}:#mode=*} )
+  assert_eq "$modes" "mode=terminal mode=captured mode=captured mode=redirected mode=captured mode=script"
+
+  stand_in 'echo "proto=[$WORKYTREE_AI_RUNFILE][$WORKYTREE_AI_SKIP]"'
+  out="$(WORKYTREE_AI_RUNFILE=/inherited zsh -f -c "source '$SHELL_FILE'; WORKYTREE_BIN=$HOME/stand-in; wt create app fix X" 2>&1)"
+  assert_eq "$out" "proto=[][script]" "script mode sends SKIP alone: an inherited RUNFILE is dropped"
+}
+
+test_ctrl_c_removes_the_runfile_and_keeps_the_users_exit_trap() {
+  fixture
+  stand_in 'echo STARTED >&2; sleep 30'
+  pty_start
+  pty_send "setopt posix_traps; trap 'print USER-EXIT-TRAP' EXIT; WORKYTREE_BIN=$HOME/stand-in"$'\n'
+  pty_send $'wt create app fix X --ai -y\n'
+  pty_wait STARTED
+  pty_send $'\x03'
+  sleep 0.5
+  pty_send $'print -r -- "RUNFILES=$(ls "$TMPDIR" | grep -c "^workytree-ai\\.")"; exit\n'
+  pty_finish
+  assert_contains "$WT_PTY_OUT" "RUNFILES=0"
+  assert_contains "$WT_PTY_OUT" "USER-EXIT-TRAP"
+}
+
+test_ctrl_c_after_the_cwd_was_deleted_lands_in_an_existing_directory() {
+  fixture
+  mkdir -p "$HOME/wts/app/fix/GONE"
+  stand_in 'rm -rf "$PWD"; echo REMOVED >&2; sleep 30'
+  pty_start
+  pty_send "WORKYTREE_BIN=$HOME/stand-in; cd ~/wts/app/fix/GONE"$'\n'
+  pty_send $'wt remove app fix GONE -y\n'
+  pty_wait REMOVED
+  pty_send $'\x03'
+  sleep 0.5
+  pty_send $'print -r -- "NOW=$PWD"; exit\n'
+  pty_finish
+  assert_contains "$WT_PTY_OUT" "workytree: your shell's directory was removed; moved to $HOME/wts/app/fix"
+  assert_contains "$WT_PTY_OUT" "NOW=$HOME/wts/app/fix"
+}
+
+test_cd_to_a_missing_worktree_fails_and_stays_put() {
+  fixture
+  local out; out="$(zsh_i 'cd ~; wt cd app fix NOPE && touch m; print rc=$?; pwd')"
+  assert_contains "$out" "workytree: not found: $HOME/wts/app/fix/NOPE"
+  assert_contains "$out" "rc=1"$'\n'"$HOME"
+  assert_not_exists "$HOME/m"
+}
+
+test_wrapper_sources_and_works_under_sh_glob() {
+  fixture
+  wt create app fix A main -y >/dev/null 2>&1
+  local out
+  out="$(zsh -f -c "setopt sh_glob; source '$SHELL_FILE'; print -r -- \"fn=\${+functions[workytree]}\${+functions[wt]}\"; wt cd app fix A" 2>&1)"
+  assert_eq "$out" "fn=11"$'\n'"$HOME/wts/app/fix/A" "sh_glob must not stop wt and workytree from being defined"
 }
 
 run_tests

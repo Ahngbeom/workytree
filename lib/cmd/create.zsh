@@ -134,19 +134,20 @@ create_do() {
 
 cmd_create() {
   local -a pos
-  local -i want_ai=0 saw_dashdash=0
+  local -i want_ai=0 no_ai=0 saw_dashdash=0
   local arg
   for arg in "$@"; do
     if (( saw_dashdash )); then pos+=("$arg"); continue; fi
     case "$arg" in
-      --)   saw_dashdash=1 ;;
-      --ai) want_ai=1 ;;
-      -*)   usage_error "unknown flag: $arg (put a value that starts with '-' after --)" ;;
-      *)    pos+=("$arg") ;;
+      --)      saw_dashdash=1 ;;
+      --ai)    want_ai=1 ;;
+      --no-ai) no_ai=1 ;;
+      -*)      usage_error "unknown flag: $arg (put a value that starts with '-' after --)" ;;
+      *)       pos+=("$arg") ;;
     esac
   done
   require_config
-  (( ${#pos} <= 4 )) || usage_error "usage: workytree create [repo] [kind] [ticket] [base] [--ai]"
+  (( ${#pos} <= 4 )) || usage_error "usage: workytree create [repo] [kind] [ticket] [base] [--ai|--no-ai]"
   local repo="" kind="" ticket="" base="" project="" repo_path="" r inferred=""
   inferred="$(infer_current_repo 2>/dev/null)" || inferred=""
 
@@ -166,12 +167,12 @@ cmd_create() {
   fi
 
   if [[ -z "$repo_path" ]]; then
-    prompt_available || usage_error "repo is required: workytree create <repo> <kind> <ticket> [base]"
+    prompt_available || usage_error "repo is required: workytree create <repo> <kind> <ticket> [base] (not asking: $(prompt_blocker))"
     create_pick_repo   # sets project repo repo_path (Task 5)
   fi
 
   if [[ -z "$kind" ]]; then
-    prompt_available || usage_error "kind is required: workytree create [repo] <kind> <ticket> [base]"
+    prompt_available || usage_error "kind is required: workytree create [repo] <kind> <ticket> [base] (not asking: $(prompt_blocker))"
     while true; do
       prompt_choose "kind" 1 ${(f)"$(config_kinds)"}; kind="$REPLY"
       _create_name_ok "$repo_path" "$kind" && break
@@ -180,7 +181,7 @@ cmd_create() {
     exit 2
   fi
   if [[ -z "$ticket" ]]; then
-    prompt_available || usage_error "ticket is required: workytree create [repo] <kind> <ticket> [base]"
+    prompt_available || usage_error "ticket is required: workytree create [repo] <kind> <ticket> [base] (not asking: $(prompt_blocker))"
     while true; do
       prompt_input "ticket" ""; ticket="$REPLY"
       _create_name_ok "$repo_path" "$kind" "$ticket" && break
@@ -246,5 +247,5 @@ cmd_create() {
     prompt_confirm "Create?" y || exit 130
   fi
   create_do "$project" "$repo" "$repo_path" "$kind" "$ticket" "$source" "$base_ref" "$base_label"
-  ai_maybe_offer "$project" "$want_ai"
+  ai_maybe_offer "$project" "$want_ai" "$no_ai"
 }

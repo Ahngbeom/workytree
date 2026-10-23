@@ -291,9 +291,8 @@ test_broken_config_complete_is_silent() {
 test_broken_config_path_and_edit_still_work() {
   _broken_config
   assert_eq "$(wt config path)" "$XDG_CONFIG_HOME/workytree/config"
-  local out; out="$(EDITOR=cat wt config edit)"
-  assert_eq "$?" "0"
-  assert_eq "$out" $'kinds = a\nkinds = b'
+  local out; out="$(pty_run "EDITOR=cat $WT_BIN config edit; print RC=\$?")"
+  assert_contains "$out" $'kinds = a\nkinds = b\nRC=0'
 }
 
 test_broken_config_help_and_version_still_work() {
@@ -457,8 +456,8 @@ test_directory_at_config_path_all_consumers() {
   # touch-create over the directory (R41: `-e`, not `-f`, guards that touch-create) --
   # whatever the editor itself then does with a directory target is between it and the
   # user, not a workytree-authored diagnostic.
-  out="$(EDITOR=cat wt config edit 2>&1)"
-  assert_contains "$out" "Is a directory"        # cat's own message: the editor was reached
+  out="$(pty_run "EDITOR=cat $WT_BIN config edit")"
+  assert_contains "$out" "Is a directory"       # cat's own message: the editor was reached
   [[ "$out" == *"cmd_config:"* ]] && { (( ++_fail )); print -u2 "  FAIL: workytree's own raw diagnostic leaked: $out"; } || (( ++_pass ))
   assert_eq "$(print -l -- "$cfg"/*(N))" ""      # still no stray file created inside
 }
@@ -631,8 +630,8 @@ test_readonly_config_directory_refuses_first_write() {
 
   # `config edit` is the recovery path and must still reach the editor -- and must not leak
   # its own touch-create diagnostic while getting there (R42).
-  out="$(EDITOR=true wt config edit 2>&1)"; rc=$?
-  assert_eq "$rc" "0" "config edit must still reach the editor"
+  out="$(pty_run "EDITOR=true $WT_BIN config edit; print RC=\$?")"
+  assert_contains "$out" "RC=0" "config edit must still reach the editor"
   _assert_no_raw_shell_diagnostic "$out" "config edit"
 
   rm -f "$errfile"

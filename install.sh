@@ -61,6 +61,8 @@ fi
 mkdir -p "$BIN_DIR" || die "could not create $BIN_DIR"
 ln -sfn "$INSTALL_DIR/bin/workytree" "$BIN_DIR/workytree" || die "could not link $BIN_DIR/workytree -> $INSTALL_DIR/bin/workytree"
 chmod +x "$INSTALL_DIR/bin/workytree" || die "could not mark $INSTALL_DIR/bin/workytree executable"
+"$INSTALL_DIR/bin/workytree" --version >/dev/null 2>&1 \
+  || die "$INSTALL_DIR/bin/workytree does not start; it needs zsh on PATH and an env(1) that supports env -S (macOS, GNU coreutils 8.30+)"
 echo "workytree: linked $BIN_DIR/workytree"
 
 SOURCE_LINE="[ -s \"$INSTALL_DIR/shell/workytree.zsh\" ] && source \"$INSTALL_DIR/shell/workytree.zsh\""

@@ -53,7 +53,7 @@ _wt_remote_branch() {
 remove_remote_branch() {
   local repo_path="$1" remote="$2" rbranch="$3" sha="$4" out
   REPLY="$(git -C "$repo_path" rev-parse --short "$sha" 2>/dev/null)"
-  if out="$(git -C "$repo_path" push --force-with-lease="refs/heads/${rbranch}:${sha}" "$remote" --delete "$rbranch" 2>&1)"; then
+  if out="$(wt_git_remote "$repo_path" push --force-with-lease="refs/heads/${rbranch}:${sha}" "$remote" --delete "$rbranch" 2>&1)"; then
     success "deleted remote branch $remote/$rbranch (was $REPLY)"
     hint "restore it with: git -C ${(q)repo_path} push ${(q)remote} ${(q)REPLY}:refs/heads/${(q)rbranch}"
     return 0
@@ -209,7 +209,7 @@ cmd_remove() {
   (( ${#pos} <= 3 )) || usage_error "$usage"
   local repo="${pos[1]:-}" kind="${pos[2]:-}" ticket="${pos[3]:-}"
   if (( ${#pos} < 3 )); then
-    prompt_available || usage_error "$usage (repo, kind and ticket are required without a terminal)"
+    prompt_available || usage_error "$usage (repo, kind and ticket are required; not asking: $(prompt_blocker))"
     _rm_pick_worktree "$repo" "$kind"   # sets repo kind ticket, and WT_PROJECT_OPT
   fi
 
@@ -370,6 +370,8 @@ cmd_remove() {
   fi
   (( interactive && WT_CAN_CD && ! to_given )) && { _rm_pick_destination "$target" "$repo_path"; dest="$REPLY"; }
   [[ -z "$dest" ]] && _rm_is_inside "$PWD" "$target" && dest="$repo_path"
+  local -i strands_cwd=0
+  (( ! WT_CAN_CD )) && _rm_is_inside "$PWD" "$target" && strands_cwd=1
 
   if (( interactive )); then
     local branch_plan="keep" remote_plan="keep"
@@ -427,6 +429,7 @@ cmd_remove() {
   _rm_print_results "${results[@]}"
   if [[ -n "$dest" ]]; then
     (( WT_CAN_CD )) && print -r -- "  → moving to     $dest"
+    (( strands_cwd )) && { warn "your shell's current directory was removed: $target"; hint "cd ${(q-)dest}"; }
     print -u $out_fd -r -- "$dest"
   fi
   return 0
