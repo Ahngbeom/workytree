@@ -23,7 +23,8 @@ setup_env() {
   mkdir -p "$HOME" "$XDG_CONFIG_HOME"
   export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
   export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-  unset WORKYTREE_PROMPT_INPUT WORKYTREE_PROMPT_KEYS WORKYTREE_CONFIG WORKYTREE_ALIAS ZDOTDIR
+  unset WORKYTREE_PROMPT_INPUT WORKYTREE_PROMPT_KEYS WORKYTREE_CONFIG WORKYTREE_ALIAS ZDOTDIR \
+    WORKYTREE_SHELL WORKYTREE_AI_SKIP WORKYTREE_AI_RUNFILE WORKYTREE_CD_CAPABLE EDITOR VISUAL NO_COLOR
   cd "$TMP_ROOT"
 }
 teardown_env() { cd /; [[ -n "$TMP_ROOT" ]] && rm -rf "$TMP_ROOT"; }
@@ -37,6 +38,58 @@ make_repo() {
 }
 
 write_config() { mkdir -p "$XDG_CONFIG_HOME/workytree"; cat > "$XDG_CONFIG_HOME/workytree/config"; }
+
+# pty_start [code]: an interactive zsh on a pseudo-terminal, so stdin, stdout and /dev/tty are
+# all a terminal, with $HOME/.zshrc sourcing the wrapper. With <code> it runs `zsh -i -c <code>`;
+# without, a line-mode shell (no ZLE) that runs whatever pty_send types.
+typeset -g WT_PTY_OUT=''
+pty_start() {
+  zmodload zsh/zpty
+  print -r -- "print -r -- \$\$ > '$HOME/.pty.pid'; export TMPDIR='$TMP_ROOT'; source '$WT_TEST_ROOT/shell/workytree.zsh'" > "$HOME/.zshrc"
+  WT_PTY_OUT=''
+  if (( $# )); then
+    zpty -b WT_PTY "ZDOTDIR=${(q)HOME} TERM=xterm-256color zsh -d -i -c ${(q)1}"
+  else
+    zpty -b WT_PTY "ZDOTDIR=${(q)HOME} TERM=xterm-256color zsh -d -i +Z"
+  fi
+}
+# No 2>/dev/null on zpty builtins: zpty -d then closes the saved stderr, and every later
+# FAIL line of the test file goes nowhere.
+_pty_drain() { local chunk; while zpty -r -t WT_PTY chunk; do WT_PTY_OUT+="$chunk"; done; }
+# pty_wait <text> [tenths=100]: rc 1 if <text> has not appeared by then.
+pty_wait() {
+  local -i i
+  for (( i = 0; i < ${2:-100}; i++ )); do
+    _pty_drain
+    [[ "$WT_PTY_OUT" == *"$1"* ]] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+pty_send() { zpty -w -n WT_PTY "$1"; }
+_pty_kill_tree() { local c; for c in $(pgrep -P "$1"); do _pty_kill_tree "$c"; done; kill -9 "$1" 2>/dev/null; }
+# pty_finish [tenths=200]: waits for the shell to exit and leaves the transcript, CRs removed,
+# in WT_PTY_OUT. Call it in the shell that ran pty_start, not in a $(...): zpty cannot watch a
+# child of another process. A shell still running at the deadline is killed with everything it
+# started (zpty -d alone waits on an fzf that ignores SIGHUP), and the transcript ends in
+# "[pty timed out]".
+pty_finish() {
+  local -i i
+  for (( i = 0; i < ${1:-200}; i++ )); do
+    _pty_drain
+    zpty -t WT_PTY || break
+    sleep 0.1
+  done
+  if zpty -t WT_PTY; then
+    WT_PTY_OUT+=$'\n[pty timed out]'
+    [[ -s "$HOME/.pty.pid" ]] && _pty_kill_tree "$(<"$HOME/.pty.pid")"
+  fi
+  _pty_drain
+  zpty -d WT_PTY
+  WT_PTY_OUT="${WT_PTY_OUT//$'\r'/}"
+}
+# pty_run <code>: pty_start <code>, then pty_finish; prints the transcript.
+pty_run() { pty_start "$1"; pty_finish; print -r -- "$WT_PTY_OUT"; }
 
 wt() { "$WT_BIN" "$@" < /dev/null; }
 

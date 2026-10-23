@@ -439,4 +439,25 @@ test_status_table_output_is_printed_without_cd() {
   assert_contains "$out" "pwd=$HOME"
 }
 
+# The cd follows `-o interactive`, not the wrapper mode: a subshell or a group whose output is
+# piped or redirected is still a shell the user typed into, and `( wt cd x && make ) > log`
+# must run make in x.
+test_cd_follows_inside_subshells_and_piped_groups() {
+  fixture
+  wt create app fix A main -y >/dev/null 2>&1
+  local w="$HOME/wts/app/fix/A"
+  assert_eq "$(zsh_i 'cd ~; ( wt cd app fix A >/dev/null && pwd ); pwd')" "$w"$'\n'"$HOME" "( )"
+  assert_eq "$(zsh_i 'cd ~; ( wt cd app fix A && pwd ) > o; tail -1 o; pwd')" "$w"$'\n'"$HOME" "( ) > file"
+  assert_eq "$(zsh_i 'cd ~; { wt cd app fix A >/dev/null && pwd } | cat; pwd')" "$w"$'\n'"$HOME" "{ } | cat"
+}
+
+test_create_on_a_terminal_cds_and_announces_once() {
+  fixture
+  local out; local -a cd_lines
+  out="$(pty_run 'wt create app fix A main -y 2>/dev/null; print -r -- "PWD=$PWD"')"
+  cd_lines=( ${(M)${(f)out}:#*cd:*} )
+  assert_contains "$out" "PWD=$HOME/wts/app/fix/A"
+  assert_eq "${#cd_lines}" 1 "one cd: line"
+}
+
 run_tests
