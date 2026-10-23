@@ -203,68 +203,47 @@ SCRIPT
   assert_eq "$(cat "$log")" "cd script"
 }
 
-# fake_claude: a fake agent placed on PATH. When run, it prints its own cwd and args -- this
-# is how we confirm the wrapper cd's *first* and only then runs it.
-fake_claude() {
-  mkdir -p "$HOME/fakebin"
-  cat > "$HOME/fakebin/claude" <<'EOF'
-#!/bin/sh
-echo "AGENT-RAN pwd=$PWD args=$*"
-EOF
-  chmod +x "$HOME/fakebin/claude"
-  export PATH="$HOME/fakebin:$PATH"
+# fake_agent [exit-code]: $HOME/bin/fakeagent, configured as ai_agent. It reports its cwd,
+# whether its stdin is a terminal, and each argument on its own ARG: line. Never a real agent
+# name: bin/workytree puts /opt/homebrew/bin and /usr/local/bin ahead of $HOME/bin.
+fake_agent() {
+  mkdir -p "$HOME/bin"
+  printf '#!/bin/sh\n[ -t 0 ] && t=1 || t=0\necho "AGENT-RAN pwd=$PWD tty=$t"\nfor a in "$@"; do printf "ARG:%%s\\n" "$a"; done\nexit %s\n' \
+    "${1:-0}" > "$HOME/bin/fakeagent"
+  chmod +x "$HOME/bin/fakeagent"
+  export PATH="$HOME/bin:$PATH"
+  wt config set ai_agent fakeagent >/dev/null
 }
 
 test_create_ai_runs_the_agent_inside_the_new_worktree() {
-  fixture; fake_claude
-  local out
-  out="$(zsh_i 'wt create app fix PROJ-1 main --ai -y')"
-  assert_contains "$out" "AGENT-RAN"
-  assert_contains "$out" "pwd=$HOME/wts/app/fix/PROJ-1"
+  fixture; fake_agent
+  assert_contains "$(pty_run 'wt create app fix PROJ-1 main --ai -y')" \
+    "AGENT-RAN pwd=$HOME/wts/app/fix/PROJ-1 tty=1"
 }
 
 test_create_without_ai_runs_nothing() {
-  fixture; fake_claude
-  local out
-  out="$(zsh_i 'wt create app fix PROJ-1 main -y')"
+  fixture; fake_agent
+  local out; out="$(pty_run 'wt create app fix PROJ-1 main -y')"
   assert_eq "${out#*AGENT-RAN}" "$out" "no --ai, no agent"
-  assert_eq "${out##*$'\n'}" "$HOME/wts/app/fix/PROJ-1" "the last line is the path"
+  assert_contains "$out" "$HOME/wts/app/fix/PROJ-1"
 }
 
 test_agent_exit_code_does_not_fail_create() {
-  fixture
-  mkdir -p "$HOME/fakebin"
-  print -r -- '#!/bin/sh' > "$HOME/fakebin/claude"
-  print -r -- 'exit 3'   >> "$HOME/fakebin/claude"
-  chmod +x "$HOME/fakebin/claude"
-  export PATH="$HOME/fakebin:$PATH"
-  local out
-  out="$(zsh_i 'wt create app fix PROJ-1 main --ai -y; echo "rc=$?"')"
+  fixture; fake_agent 3
+  local out; out="$(pty_run 'wt create app fix PROJ-1 main --ai -y; echo "rc=$?"')"
+  assert_contains "$out" "AGENT-RAN"
   assert_contains "$out" "rc=0" "the worktree was created; the agent's own exit is not create's"
 }
 
-# TMPDIR is exported to the test's own TMP_ROOT (not left as the shared ${TMPDIR:-/tmp})
-# so the wrapper's mktemp lands there too -- otherwise a concurrent test run's own
-# workytree-ai.* files in the shared system tmp dir could make this count nonzero for
-# reasons unrelated to this test.
 test_runfile_is_removed_after_the_run() {
-  fixture; fake_claude
+  fixture; fake_agent
+  mkdir -p "$HOME/wts/app/fix/EX"
   local out
-  out="$(zsh_i 'wt create app fix PROJ-1 main --ai -y; ls "${TMPDIR:-/tmp}" | grep -c "^workytree-ai\." || true')"
+  out="$(pty_run 'wt create app fix PROJ-1 main --ai -y; wt create app fix EX main --ai -y; print -r -- "LEFT=$(ls "$TMPDIR" | grep -c "^workytree-ai\.")"')"
   assert_contains "$out" "AGENT-RAN"
-  assert_eq "${out##*$'\n'}" "0" "no runfile left behind"
+  assert_contains "$out" "LEFT=0" "no runfile left after a run or a failed create"
 }
 
-# Fix round 1, Finding 1: the pre-fix trap was `trap 'command rm -f -- "$runfile"' EXIT`
-# (single quotes) -- $runfile is expanded only when the trap FIRES, which is after this
-# function has already returned and its `local runfile` has gone out of scope. So the trap
-# ran `rm -f --` with an empty argument and deleted nothing. The only thing that ever
-# actually cleaned up was the explicit `rm -f` right before the agent runs, which is only
-# reached when --ai fires interactively -- test_runfile_is_removed_after_the_run above
-# exercises exactly that path, so it never caught this. An ordinary `create` with no `--ai`
-# still mktemps a runfile (the wrapper can't know in advance whether the CLI will use it)
-# but never writes or removes it via that explicit rm, so cleanup depends entirely on the
-# trap. TMPDIR isolation comes from zsh_i, see its comment.
 test_runfile_is_removed_without_ai() {
   fixture
   local out
@@ -272,71 +251,94 @@ test_runfile_is_removed_without_ai() {
   assert_eq "${out##*$'\n'}" "0" "no runfile left behind on a plain create without --ai"
 }
 
-# fake_claude_argv: like fake_claude, but echoes each argv element it received on its own
-# line, prefixed so the assertions below can pick just those lines out of the rest of the
-# session's output. Needed to check argv elements individually (order, and whether an
-# embedded space survived as ONE element) -- fake_claude's single `args=$*` line collapses
-# that distinction.
-fake_claude_argv() {
-  mkdir -p "$HOME/fakebin"
-  cat > "$HOME/fakebin/claude" <<'EOF'
-#!/bin/sh
-echo "AGENT-RAN"
-for a in "$@"; do
-  printf 'ARG:%s\n' "$a"
-done
-EOF
-  chmod +x "$HOME/fakebin/claude"
-  export PATH="$HOME/fakebin:$PATH"
-}
-
-# Fix round 1, Finding 2: every other test in this file produces a single-word runfile
-# ("claude"), so the ${(f)}-into-array reconstruction in shell/workytree.zsh -- the entire
-# basis for the "no eval" safety claim -- is never actually exercised past one element. This
-# test drives a real multi-element argv through config (an [agent claude] `command` override,
-# since the interview needs a real tty that the test runner doesn't have) -> ai_build_argv ->
-# the runfile -> the wrapper's ${(f)} split, and checks the fake agent received all of it
-# intact, in order, unsplit on internal whitespace.
-#
-# Fix round 2, Finding 2/6: this used to read `hello\ there` (backslash-escaped space), with a
-# comment here claiming `${(z)cmd}` was what turned the escaped space into one literal-space
-# word. Measured directly: `${(z)}` alone leaves that token as the literal TWELVE characters
-# `hello\ there`, backslash included -- it was the old, unqualified `print -l` at
-# serialization that silently ate the backslash as an "unrecognized" escape, giving the right
-# answer for the wrong reason, while a genuine escape like `\n` in the same position was
-# turned into a real newline and split into an extra argv element (see agent.zsh's argv test
-# for that fix, `print -rl`). A double-quoted value exercises the mechanism this test is
-# actually meant to cover: `${(z)}` alone leaves quote characters IN the word (verified:
-# `${(z)}` on `"hello there"` keeps the literal string `"hello there"`, quotes and all);
-# `${(Q)}`, applied after `${(z)}` in ai_build_argv, is what strips them and collapses it into
-# one clean argument.
+# The argv goes config -> ai_build_argv -> runfile -> the wrapper's ${(f)} split; a quoted,
+# space-containing value must arrive as one argument without its quotes.
 test_multi_element_argv_survives_the_round_trip() {
-  make_repo "$HOME/src/app"
-  write_config <<'EOF'
-[project me]
-repo_root = ~/src
-worktree_root = ~/wts
+  fixture; fake_agent
+  cat >> "$XDG_CONFIG_HOME/workytree/config" <<'EOF'
 
-[agent claude]
-command = claude --bare "hello there" --flag
+[agent fakeagent]
+command = fakeagent --bare "hello there" --flag
 EOF
-  fake_claude_argv
-  local out
-  out="$(zsh_i 'wt create app fix PROJ-1 main --ai -y')"
-  assert_contains "$out" "AGENT-RAN"
-  local -a lines args
-  lines=( "${(f)out}" )
-  local l
-  for l in "${lines[@]}"; do
-    [[ "$l" == ARG:* ]] && args+=( "${l#ARG:}" )
-  done
-  assert_eq "${#args}" "3" "all three non-executable argv elements arrived"
+  local out; out="$(pty_run 'wt create app fix PROJ-1 main --ai -y')"
+  local -a args; args=( ${${(M)${(f)out}:#ARG:*}#ARG:} )
+  assert_eq "${#args}" "3" "all three arguments arrived"
   assert_eq "${args[1]}" "--bare"
-  assert_eq "${args[2]}" "hello there" "the quoted, space-containing element arrived as ONE argument with no quote characters"
+  assert_eq "${args[2]}" "hello there" "one argument, no quote characters"
   assert_eq "${args[3]}" "--flag"
 }
 
+test_configured_session_arms_the_channel_without_the_flag() {
+  fixture; fake_agent
+  wt config set ai_session always >/dev/null
+  assert_contains "$(pty_run 'wt create app fix PROJ-1 main -y')" "AGENT-RAN" "ai_session = always arms it with no flag"
+}
 
+# K2: the agent runs only in terminal mode with a terminal on stdin. Everywhere else it would
+# inherit a pipe, a file or the loop's input.
+test_agent_never_runs_where_it_cannot_attach_to_the_terminal() {
+  fixture; fake_agent
+  wt config set ai_session ask >/dev/null
+  local code
+  code="$(cat <<EOF
+x=\$(wt create app fix T2 main -y)
+wt create app fix T3 main -y | cat
+wt create app fix T4 main -y > ~/log
+wt create app fix T5 main -y < /dev/null
+printf 'T6\nT7\n' | while read t; do wt create app fix \$t main -y; done
+zsh -f -c "source '$SHELL_FILE'; wt create app fix T8 main -y"
+EOF
+)"
+  local out; out="$(pty_run "$code" 2>&1)"
+  assert_eq "${out#*AGENT-RAN}" "$out" "no agent outside terminal mode"
+  assert_eq "${out#*session here?}" "$out" "and no question"
+  assert_dir "$HOME/wts/app/fix/T7"
+}
+
+test_ai_skip_names_one_cause() {
+  fixture; fake_agent
+  local code
+  code="$(cat <<EOF
+wt create app fix S1 main --ai -y > /dev/null
+wt create app fix S2 main --ai -y < /dev/null
+TMPDIR=$HOME/no-such-dir wt create app fix S3 main --ai -y
+zsh -f -c "source '$SHELL_FILE'; wt create app fix S4 main --ai -y"
+$WT_BIN create app fix S5 main --ai -y
+EOF
+)"
+  local out; out="$(pty_run "$code")"
+  local -a lines; lines=( ${(M)${(f)out}:#*ai session skipped*} )
+  assert_eq "${#lines}" 5 "one line per create"
+  assert_contains "${lines[1]}" "output is redirected or captured"
+  assert_contains "${lines[2]}" "stdin is not a terminal"
+  assert_contains "${lines[3]}" "could not create a temp file in $HOME/no-such-dir"
+  assert_contains "${lines[4]}" "not an interactive shell"
+  assert_contains "${lines[5]}" "shell integration required"
+}
+
+test_ai_enabled_after_the_shell_started_says_so() {
+  fixture; fake_agent
+  local out; out="$(pty_run 'wt config set ai_session always 2>/dev/null; wt create app fix L1 main -y')"
+  assert_contains "$out" "ai session skipped: enabled after this shell started; open a new shell or pass --ai"
+  assert_eq "${out#*AGENT-RAN}" "$out"
+}
+
+test_no_ai_beats_always_and_ai() {
+  fixture; fake_agent
+  wt config set ai_session always >/dev/null
+  local out; out="$(pty_run 'wt create app fix N1 main -y --no-ai; wt create --ai app fix N2 main -y --no-ai')"
+  assert_eq "${out#*AGENT-RAN}" "$out" "--no-ai always wins"
+  assert_eq "${out#*ai session skipped}" "$out" "and says nothing"
+  assert_dir "$HOME/wts/app/fix/N2"
+}
+
+test_ask_with_yes_runs_without_asking() {
+  fixture; fake_agent
+  wt config set ai_session ask >/dev/null
+  local out; out="$(pty_run 'wt create app fix Y1 main -y')"
+  assert_contains "$out" "AGENT-RAN pwd=$HOME/wts/app/fix/Y1"
+  assert_eq "${out#*session here?}" "$out" "no question"
+}
 
 # A hook cannot be simulated after the fact -- it has to observe the file WHILE the CLI runs.
 # post-checkout fires inside `git worktree add`, exactly the window a real attack would use.
@@ -369,32 +371,20 @@ test_hook_cannot_find_a_runfile_when_sessions_are_not_configured() {
 # --ai is a positional. A stand-in CLI reports whether it was handed a runfile.
 test_ai_flag_scan_matches_the_cli_parsing() {
   fixture
-  stand_in '[ -n "$WORKYTREE_AI_RUNFILE" ] && s=ARMED || s=NOT-ARMED; echo "$* -> $s"'
+  stand_in '[ -n "$WORKYTREE_AI_RUNFILE" ] && s=ARMED || s="NOT-ARMED:$WORKYTREE_AI_SKIP"; echo "$* -> $s"'
   local out
   out="$(pty_run "WORKYTREE_BIN=$HOME/stand-in
     wt create app fix PROJ-1; wt create --ai app fix; wt create app fix PROJ-1 --ai
-    wt create -- --ai fix; wt create --ai -- x")"
-  assert_contains "$out" "create app fix PROJ-1 -> NOT-ARMED"
+    wt create -- --ai fix; wt create --ai -- x
+    wt create --no-ai app fix; wt create -- --no-ai fix; wt create --ai -- --no-ai")"
+  assert_contains "$out" "create app fix PROJ-1 -> NOT-ARMED:startup"
   assert_contains "$out" "create --ai app fix -> ARMED"
   assert_contains "$out" "create app fix PROJ-1 --ai -> ARMED"
-  assert_contains "$out" "create -- --ai fix -> NOT-ARMED" "-- makes a following --ai a positional"
+  assert_contains "$out" "create -- --ai fix -> NOT-ARMED:startup" "-- makes a following --ai a positional"
   assert_contains "$out" "create --ai -- x -> ARMED" "--ai before -- is still the flag"
-}
-
-test_ai_flag_arms_the_channel_even_when_config_says_nothing() {
-  fixture; fake_claude
-  local out
-  out="$(zsh_i 'wt create app fix PROJ-1 main --ai -y')"
-  assert_contains "$out" "AGENT-RAN" "--ai arms the channel on its own"
-}
-
-
-test_configured_session_arms_the_channel_without_the_flag() {
-  fixture; fake_claude
-  wt config set ai_session always >/dev/null
-  local out
-  out="$(zsh_i 'wt create app fix PROJ-1 main -y')"
-  assert_contains "$out" "AGENT-RAN" "ai_session = always arms it with no flag"
+  assert_contains "$out" "create --no-ai app fix -> NOT-ARMED:no-ai"
+  assert_contains "$out" "create -- --no-ai fix -> NOT-ARMED:startup"
+  assert_contains "$out" "create --ai -- --no-ai -> ARMED"
 }
 
 # status uses the same "last stdout line is a directory -> cd" contract as create/cd/remove.

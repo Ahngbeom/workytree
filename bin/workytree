@@ -31,7 +31,8 @@ usage() {
 Usage: workytree <command> [args] [--project <name>] [--yes|-y] [--no-color]
 
   workytree init [name repo_root worktree_root]          interactive first-time setup
-  workytree create [--ai] [repo] [kind] [ticket] [base]  create (or reuse) a worktree; asks for missing args
+  workytree create [--ai|--no-ai] [repo] [kind] [ticket] [base]
+                                                         create (or reuse) a worktree; asks for missing args
   workytree remove [repo] [kind] [ticket] [--force] [-b|--branch] [-B|--branch-force]
                   [-r|--remote] [--to <dir>]                picks a worktree and asks about branches/destination when interactive
   workytree prune [repo]                                 prune stale refs + orphan dirs

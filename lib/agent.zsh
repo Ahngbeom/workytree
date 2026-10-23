@@ -110,6 +110,10 @@ ai_build_argv() {
   # quote characters straight to the agent.
   out_argv=( ${(Q)${(z)cmd}} )
 
+  if [[ "$mode" == ask ]] && ! prompt_available && (( ! ${WT_YES:-0} )); then
+    warn "ai session skipped: ai_session = ask needs a terminal to ask (pass --ai or -y to run it)"
+    return 1
+  fi
   if prompt_available; then
     if [[ "$mode" == ask ]]; then
       prompt_confirm "open a $name session here?" y || return 1
@@ -142,30 +146,41 @@ ai_build_argv() {
   print -rl -- "${out_argv[@]}"
 }
 
-# ai_maybe_offer <project> <forced:0|1>: called after create has already succeeded. If
-# every gate passes, writes argv to $WT_AI_RUNFILE (bin/workytree's own copy of the
-# $WORKYTREE_AI_RUNFILE the wrapper exported -- see bin/workytree's header for why the CLI
-# captures it into this name and unsets the original before touching git).
-#
-# This function is always rc 0. Failing to launch an AI session is not a failure of create --
-# the worktree was created, and that's this command's contract (spec §8). Every diagnostic
-# goes out via warn (stderr), so "last stdout line = the path" still holds.
+_ai_skip_reason() {
+  case "${WT_AI_SKIP:-}" in
+    script)              print -r -- "not an interactive shell" ;;
+    redirected|captured) print -r -- "output is redirected or captured" ;;
+    stdin)               print -r -- "stdin is not a terminal" ;;
+    tmp)                 print -r -- "could not create a temp file in ${TMPDIR:-/tmp}" ;;
+    startup)             print -r -- "enabled after this shell started; open a new shell or pass --ai" ;;
+    *)                   print -r -- "shell integration required (source shell/workytree.zsh and use wt)" ;;
+  esac
+}
+
+# ai_maybe_offer <project> <forced:0|1> <refused:0|1>: called after create succeeded. When an
+# agent should run, writes its argv to WT_AI_RUNFILE. Always rc 0: a session that does not
+# start is not a failed create, and every diagnostic goes to stderr.
 ai_maybe_offer() {
   local project="$1"
-  local -i forced=$2
+  local -i forced=$2 refused=${3:-0}
   local mode name cmd first out
   local -a cmd_words
 
+  (( refused )) && return 0
   if (( forced )); then mode=always; else mode="$(ai_session_mode "$project")"; fi
   [[ "$mode" == off ]] && return 0
 
   if [[ -z "${WT_AI_RUNFILE:-}" ]]; then
-    warn "ai session skipped: shell integration required"
-    warn "source shell/workytree.zsh from your shell config and use 'wt'/'workytree'"
+    # Silent in CI and agent harnesses unless asked for: they have no terminal on stdin.
+    (( forced )) || [[ -t 0 ]] || return 0
+    warn "ai session skipped: $(_ai_skip_reason)"
     return 0
   fi
 
-  name="$(ai_resolve_agent "$project")" || return 0
+  name="$(ai_resolve_agent "$project")" || {
+    warn "ai session skipped: no AI agent found on PATH (looked for ${(j:, :)WT_AI_PROBE_ORDER})"
+    return 0
+  }
   cmd="$(ai_agent_command "$name")"
   # NOT `${${(z)cmd}[1]}`: when (z)-splitting yields exactly one word, that nested-subscript
   # form silently indexes the ORIGINAL scalar by character instead of the split array by

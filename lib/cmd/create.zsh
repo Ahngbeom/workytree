@@ -96,21 +96,19 @@ create_do() {
 cmd_create() {
   require_config
   local -a pos
-  local -i want_ai=0 saw_dashdash=0
+  local -i want_ai=0 no_ai=0 saw_dashdash=0
   local arg
-  # Only `--ai` is filtered out; every other dash-prefixed token still stays positional, as
-  # it always has. Making every `-*` a usage error the way remove does would break input
-  # that passes today -- that's out of scope for this task. `--` is the escape hatch for
-  # passing a literal `--ai` as a repo name.
+  # TODO(T7-2): every other dash-prefixed token stays positional and can reach git as an option.
   for arg in "$@"; do
     if (( saw_dashdash )); then pos+=("$arg"); continue; fi
     case "$arg" in
-      --)   saw_dashdash=1 ;;
-      --ai) want_ai=1 ;;
-      *)    pos+=("$arg") ;;
+      --)      saw_dashdash=1 ;;
+      --ai)    want_ai=1 ;;
+      --no-ai) no_ai=1 ;;
+      *)       pos+=("$arg") ;;
     esac
   done
-  (( ${#pos} <= 4 )) || usage_error "usage: workytree create [repo] [kind] [ticket] [base] [--ai]"
+  (( ${#pos} <= 4 )) || usage_error "usage: workytree create [repo] [kind] [ticket] [base] [--ai|--no-ai]"
   local repo="" kind="" ticket="" base="" project="" repo_path="" r inferred=""
   inferred="$(infer_current_repo 2>/dev/null)" || inferred=""
 
@@ -162,5 +160,5 @@ cmd_create() {
     prompt_confirm "Create?" y || exit 130
   fi
   create_do "$project" "$repo" "$repo_path" "$kind" "$ticket" "$base_ref" "$base_label"
-  ai_maybe_offer "$project" "$want_ai"
+  ai_maybe_offer "$project" "$want_ai" "$no_ai"
 }

@@ -25,7 +25,7 @@ workytree() {
   # Mirrors parse_global_opts and cmd_create token for token: the first token that is not a
   # global option is the subcommand, and `--` ends create's own flags.
   local sub="" a
-  local -i skip=0 dashdash=0 want_ai=0 plain=0
+  local -i skip=0 dashdash=0 want_ai=0 no_ai=0 plain=0
   for a in "$@"; do
     [[ "$a" == --no-color ]] && plain=1
     if (( skip )); then skip=0
@@ -39,21 +39,30 @@ workytree() {
       case "$a" in
         --) dashdash=1 ;;
         --ai) want_ai=1 ;;
+        --no-ai) no_ai=1 ;;
       esac
     fi
   done
+  local ai_skip=""
+  if [[ "$sub" == create ]]; then
+    if (( no_ai )); then ai_skip=no-ai
+    elif [[ "$mode" != terminal ]]; then ai_skip=$mode
+    elif [[ ! -t 0 ]]; then ai_skip=stdin
+    elif (( ! want_ai && ! ${_WORKYTREE_AI_CONFIGURED:-0} )); then ai_skip=startup
+    fi
+  fi
   if [[ "$mode" == script || "$sub" != (create|cd|remove|status) ]]; then
-    WORKYTREE_SHELL=$mode "$bin" "$@"
+    WORKYTREE_SHELL=$mode WORKYTREE_AI_SKIP=$ai_skip "$bin" "$@"
     return
   fi
 
   local runfile="" output target
   local -i rc
   {
-    if [[ "$sub" == create ]] && (( want_ai || ${_WORKYTREE_AI_CONFIGURED:-0} )); then
-      runfile="$(command mktemp "${TMPDIR:-/tmp}/workytree-ai.XXXXXX" 2>/dev/null)" || runfile=""
+    if [[ "$sub" == create && -z "$ai_skip" ]]; then
+      runfile="$(command mktemp "${TMPDIR:-/tmp}/workytree-ai.XXXXXX" 2>/dev/null)" || { runfile=""; ai_skip=tmp; }
     fi
-    output="$(WORKYTREE_SHELL=$mode WORKYTREE_AI_RUNFILE=$runfile "$bin" "$@")"
+    output="$(WORKYTREE_SHELL=$mode WORKYTREE_AI_RUNFILE=$runfile WORKYTREE_AI_SKIP=$ai_skip "$bin" "$@")"
     rc=$?
     if (( rc )); then
       [[ -n "$output" ]] && print -r -- "$output"

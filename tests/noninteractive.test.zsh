@@ -134,4 +134,20 @@ test_config_edit_refuses_with_yes_or_without_a_terminal() {
   assert_contains "$(pty_run "EDITOR=true $WT_BIN config edit; print RC=\$?")" "RC=0" "a terminal still gets the editor"
 }
 
+test_ai_session_runs_with_yes_and_is_skipped_without_a_terminal() {
+  fixture
+  mkdir -p "$HOME/bin"; printf '#!/bin/sh\n' > "$HOME/bin/fakeagent"; chmod +x "$HOME/bin/fakeagent"
+  export PATH="$HOME/bin:$PATH"
+  wt config set ai_agent fakeagent >/dev/null
+  wt config set ai_session ask >/dev/null
+  local rf="$TMP_ROOT/runfile" out; : > "$rf"
+  WORKYTREE_AI_RUNFILE="$rf" wt create app fix A1 main -y >/dev/null 2>&1
+  assert_eq "$(<"$rf")" "fakeagent" "-y runs it"
+  : > "$rf"
+  out="$(WORKYTREE_AI_RUNFILE="$rf" wt create app fix A2 main 2>&1)"
+  assert_dir "$HOME/wts/app/fix/A2"
+  assert_eq "$(<"$rf")" "" "no terminal, no -y: not run"
+  assert_contains "$out" "ai session skipped: ai_session = ask needs a terminal to ask (pass --ai or -y to run it)"
+}
+
 run_tests
