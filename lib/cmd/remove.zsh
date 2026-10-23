@@ -19,19 +19,19 @@ remove_branch() {
   return 1
 }
 
-# _wt_remote_branch <repo_path> <branch>: reply=(remote remote_branch) for the branch's remote
-# counterpart -- its upstream while that tracking ref still exists (a remotely deleted upstream
-# stays configured after `fetch --prune`), else the first remote (origin first) holding a
-# same-named tracking ref. Must run before the local branch is deleted: that also deletes its upstream
-# config, and the lookup would then silently fall back to name matching.
+# _wt_remote_branch <repo_path> <branch>: reply=(remote remote_branch) for <branch> on a remote,
+# never a differently named upstream -- the upstream's remote while that tracking ref still exists
+# (a remotely deleted upstream stays configured after `fetch --prune`), else the first remote
+# (origin first) holding a same-named tracking ref. Must run before the local branch is deleted:
+# that also deletes its upstream config, and the remote choice would then silently change.
 _wt_remote_branch() {
   local repo_path="$1" branch="$2" up r ref
   local -a remotes
   reply=()
   up="$(git -C "$repo_path" for-each-ref --format='%(upstream:remotename)%09%(upstream)' "refs/heads/$branch" 2>/dev/null)"
   r="${up%%$'\t'*}" ref="${up#*$'\t'}"
-  if [[ -n "$r" && "$ref" == "refs/remotes/$r/"?* ]] && git -C "$repo_path" show-ref --verify --quiet "$ref"; then
-    reply=("$r" "${ref#refs/remotes/$r/}"); return 0
+  if [[ -n "$r" && "$ref" == "refs/remotes/$r/$branch" ]] && git -C "$repo_path" show-ref --verify --quiet "$ref"; then
+    reply=("$r" "$branch"); return 0
   fi
   remotes=( ${(f)"$(git -C "$repo_path" remote 2>/dev/null)"} )
   (( ${remotes[(Ie)origin]} )) && remotes=(origin "${(@)remotes:#origin}")

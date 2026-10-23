@@ -460,6 +460,29 @@ test_remote_question_about_commits_only_there_defaults_to_no() {
   assert_contains "$out" "origin/fix/T (has commits not in fix/T or origin/main; use -B)"
 }
 
+# develop_upstream_fixture: fix/T tracks origin/develop, as after `switch -c fix/T origin/develop`.
+develop_upstream_fixture() {
+  fixture
+  git -C "$HOME/src/app" push -q origin main:develop 2>/dev/null
+  git -C "$HOME/src/app" branch -q -u origin/develop fix/T
+}
+
+test_remote_flag_ignores_an_upstream_with_another_name() {
+  develop_upstream_fixture; git -C "$HOME/src/app" push -q origin --delete fix/T 2>/dev/null
+  local out; out="$(wt remove app fix T -r -y 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$(remote_branch develop)" develop "origin/develop untouched"
+  assert_contains "$out" "no remote branch known for 'fix/T'"
+}
+
+test_remote_flag_deletes_the_same_named_branch_not_the_upstream() {
+  develop_upstream_fixture
+  local out; out="$(wt remove app fix T -r -y 2>&1)"
+  assert_eq "$?" 0
+  assert_contains "$(remote_branch develop)" develop "origin/develop untouched"
+  assert_eq "$(remote_branch fix/T)" "" "origin/fix/T deleted"
+}
+
 # remove_with_prs <args...>: remove with lib/ sourced in a subshell and forge_pr_rows answering
 # from $HOME/prs. A fake gh on PATH cannot shadow a real one (bin/workytree's PATH).
 remove_with_prs() {
