@@ -184,17 +184,13 @@ test_create_relays_info_lines() {
   assert_contains "$out" "result: created"
 }
 
-# R23/Finding 4: `cmd_cd` is currently a literal alias for `cmd_path` (lib/cmd/path.zsh),
-# so testing through the real CLI cannot distinguish "the wrapper translated cd -> path" from
-# "it didn't bother, and cd/path happen to produce the same output anyway". Stub out
-# $WORKYTREE_BIN with a spy that records its own $1 so the wrapper's translation is verified
-# directly, independent of that CLI coincidence.
-test_cd_translates_to_path_subcommand() {
+# `cd` reaches the CLI as `cd`: cmd_cd checks that the target exists, cmd_path does not.
+test_cd_reaches_the_cli_as_cd() {
   fixture
   local stub="$TMP_ROOT/stub-workytree" log="$TMP_ROOT/stub.log"
   cat > "$stub" <<'SCRIPT'
 #!/usr/bin/env zsh
-print -r -- "$1" > "$WT_STUB_LOG"
+print -r -- "$1 $WORKYTREE_SHELL" > "$WT_STUB_LOG"
 print -r -- "/stub/target/path"
 SCRIPT
   chmod +x "$stub"
@@ -204,7 +200,7 @@ SCRIPT
     WORKYTREE_BIN='$stub'
     workytree cd app fix T >/dev/null
   "
-  assert_eq "$(cat "$log")" "path"
+  assert_eq "$(cat "$log")" "cd script"
 }
 
 # fake_claude: a fake agent placed on PATH. When run, it prints its own cwd and args -- this
@@ -232,12 +228,7 @@ test_create_without_ai_runs_nothing() {
   local out
   out="$(zsh_i 'wt create app fix PROJ-1 main -y')"
   assert_eq "${out#*AGENT-RAN}" "$out" "no --ai, no agent"
-  # Two separate checks, not one "cd: $target" substring: `print -P "%F{70}cd:%f $target"`
-  # puts a color-reset escape between "cd:" and the space+path, so the literal adjacent
-  # string only appears when the terminal is reported as colorless. Checking "cd:" and the
-  # path independently verifies the ordinary auto-cd still ran without depending on that.
-  assert_contains "$out" "cd:"
-  assert_contains "$out" "$HOME/wts/app/fix/PROJ-1"
+  assert_eq "${out##*$'\n'}" "$HOME/wts/app/fix/PROJ-1" "the last line is the path"
 }
 
 test_agent_exit_code_does_not_fail_create() {
@@ -374,21 +365,15 @@ test_hook_cannot_find_a_runfile_when_sessions_are_not_configured() {
   assert_eq "${out#*HOOK-FOUND-RUNFILE}" "$out" "an unconfigured user's create never arms the channel"
 }
 
-# The wrapper decides whether to arm the channel by scanning the command line for --ai, and
-# that scan has to agree with the CLI's own parsing or the two disagree about whether this run
-# opted in. `--` ends option parsing for create (lib/cmd/create.zsh), so a literal --ai after
-# it is a repo name, not the flag.
-#
-# This exercises the scan directly rather than through a real `create`: a create whose repo
-# name is `--ai` fails before `git worktree add` ever runs, so the post-checkout probe used
-# above would have nothing to observe and would pass no matter what the wrapper decided.
+# The wrapper's --ai scan must agree with cmd_create: `--` ends create's flags, so a later
+# --ai is a positional. A stand-in CLI reports whether it was handed a runfile.
 test_ai_flag_scan_matches_the_cli_parsing() {
   fixture
+  stand_in '[ -n "$WORKYTREE_AI_RUNFILE" ] && s=ARMED || s=NOT-ARMED; echo "$* -> $s"'
   local out
-  out="$(zsh_i '
-    for a in "create app fix PROJ-1" "create --ai app fix" "create app fix PROJ-1 --ai" "create -- --ai fix" "create --ai -- x"; do
-      _workytree_has_ai_flag ${=a} && print "$a -> ARMED" || print "$a -> NOT-ARMED"
-    done')"
+  out="$(pty_run "WORKYTREE_BIN=$HOME/stand-in
+    wt create app fix PROJ-1; wt create --ai app fix; wt create app fix PROJ-1 --ai
+    wt create -- --ai fix; wt create --ai -- x")"
   assert_contains "$out" "create app fix PROJ-1 -> NOT-ARMED"
   assert_contains "$out" "create --ai app fix -> ARMED"
   assert_contains "$out" "create app fix PROJ-1 --ai -> ARMED"
@@ -414,20 +399,19 @@ test_configured_session_arms_the_channel_without_the_flag() {
 
 # status uses the same "last stdout line is a directory -> cd" contract as create/cd/remove.
 # The real CLI only prints a path after an fzf selection, so a stand-in binary plays that part
-# and reports whether the wrapper claimed the cd capability -- which it must not when its own
-# stdout is a pipe, as it is here.
+# and reports the mode: zsh_i's top level has a pipe on stdout, so redirected.
 test_status_output_last_line_is_a_cd_target() {
   fixture
   mkdir -p "$HOME/fakebin" "$HOME/target"
   cat > "$HOME/fakebin/wt-status" <<EOF
 #!/bin/sh
-echo "capable=[\${WORKYTREE_CD_CAPABLE:-}]"
+echo "mode=[\${WORKYTREE_SHELL:-}]"
 echo "$HOME/target"
 EOF
   chmod +x "$HOME/fakebin/wt-status"
   local out
   out="$(zsh_i "WORKYTREE_BIN='$HOME/fakebin/wt-status'; wt status; print -r -- \"pwd=\$PWD\"")"
-  assert_contains "$out" "capable=[]"
+  assert_contains "$out" "mode=[redirected]"
   assert_contains "$out" "pwd=$HOME/target"
 }
 
@@ -449,6 +433,7 @@ test_cd_follows_inside_subshells_and_piped_groups() {
   assert_eq "$(zsh_i 'cd ~; ( wt cd app fix A >/dev/null && pwd ); pwd')" "$w"$'\n'"$HOME" "( )"
   assert_eq "$(zsh_i 'cd ~; ( wt cd app fix A && pwd ) > o; tail -1 o; pwd')" "$w"$'\n'"$HOME" "( ) > file"
   assert_eq "$(zsh_i 'cd ~; { wt cd app fix A >/dev/null && pwd } | cat; pwd')" "$w"$'\n'"$HOME" "{ } | cat"
+  assert_eq "$(zsh_i 'cd ~; ( wt cd app fix A && pwd ) | tail -1; pwd')" "$w"$'\n'"$HOME" "( ) | pipe"
 }
 
 test_create_on_a_terminal_cds_and_announces_once() {
@@ -490,6 +475,126 @@ EOF
   print -r -- "alias wt='echo mine'; source '$SHELL_FILE'" > "$HOME/.zshrc"
   assert_eq "$(ZDOTDIR="$HOME" zsh -d -i -c wt 2>&1)" \
     "workytree: config has errors; run 'workytree list' to see them"$'\n'"mine"
+}
+
+# K1: inside $(...) or a pipe the caller gets the bare path, never the "cd:" announcement.
+test_capture_and_pipes_get_the_bare_path() {
+  fixture
+  wt create app fix A main -y >/dev/null 2>&1
+  assert_eq "$(zsh_i 'x=$(wt cd app fix A); print -r -- "[$x]"')" "[$HOME/wts/app/fix/A]"
+  assert_eq "$(zsh_i 'wt create app fix B main -y 2>/dev/null | tail -1')" "$HOME/wts/app/fix/B"
+}
+
+test_terminal_cd_line_honours_no_color_and_dumb_terminals() {
+  fixture
+  wt create app fix A main -y >/dev/null 2>&1
+  local w="$HOME/wts/app/fix/A" out
+  assert_contains "$(pty_run 'wt cd app fix A')" $'\e[38;5;70mcd:\e[0m '"$w"
+  out="$(pty_run 'NO_COLOR=1 wt cd app fix A; wt --no-color cd app fix A; TERM=dumb wt cd app fix A')"
+  assert_eq "$out" "cd: $w"$'\n'"cd: $w"$'\n'"cd: $w"
+}
+
+test_wrapper_survives_caller_options_and_odd_ticket_names() {
+  fixture
+  local code
+  code="$(cat <<'EOF'
+export NO_COLOR=1
+setopt ksh_arrays sh_word_split posix_traps prompt_subst
+wt create app fix '50%d' main -y 2>/dev/null
+wt create app fix 'U$(id>PWNED)' main -y 2>/dev/null
+print -r -- "PWD=$PWD"
+wt cd app >/dev/null; print -r -- "PWD=$PWD"
+EOF
+)"
+  local out; out="$(pty_run "$code")"
+  assert_contains "$out" "cd: $HOME/wts/app/fix/50%d"
+  assert_contains "$out" "cd: $HOME/wts/app/fix/U\$(id>PWNED)"
+  assert_contains "$out" "PWD=$HOME/wts/app/fix/U\$(id>PWNED)"
+  assert_contains "$out" "PWD=$HOME/src/app"
+  assert_not_exists "$HOME/wts/app/fix/U\$(id>PWNED)/PWNED"
+}
+
+test_failure_replays_every_line_and_keeps_the_exit_code() {
+  fixture
+  mkdir -p "$HOME/src/app/.git/refs/heads/fix"; : > "$HOME/src/app/.git/refs/heads/fix/EX.lock"
+  assert_contains "$(zsh_i 'cd ~; wt create app fix EX main -y 2>/dev/null; print rc=$?; pwd')" \
+    "base ref: main"$'\n'"rc=1"$'\n'"$HOME"
+}
+
+# Claude Code's shell snapshot keeps workytree() and wt() but drops `_`-prefixed helpers and
+# plain globals such as WORKYTREE_BIN.
+test_wrapper_works_from_a_shell_snapshot() {
+  fixture
+  zsh -f -c "source '$SHELL_FILE'; typeset -f workytree wt" > "$HOME/snap.zsh"
+  mkdir -p "$HOME/pbin"; ln -s "$WT_BIN" "$HOME/pbin/workytree"
+  local out
+  out="$(PATH="$HOME/pbin:$PATH" zsh -f -c "source '$HOME/snap.zsh'; wt --version; print rc=\$?; wt path app" 2>&1)"
+  assert_contains "$out" "workytree 0."
+  assert_contains "$out" "rc=0"
+  assert_contains "$out" "$HOME/src/app"
+  out="$(zsh -f -c "source '$HOME/snap.zsh'; path=(/usr/bin /bin); wt --version; print rc=\$?" 2>&1)"
+  assert_contains "$out" "workytree: not found on PATH"
+  assert_contains "$out" "rc=127"
+}
+
+# stand_in <body>: a fake bin/workytree for the wrapper to call; WORKYTREE_BIN points at it.
+stand_in() {
+  print -r -- "#!/bin/sh
+$1" > "$HOME/stand-in"
+  chmod +x "$HOME/stand-in"
+}
+
+# The mode is what the CLI decides ownership from (WT_CAN_CD, the K3 warning, fzf); the bare
+# path in a capture alone cannot tell captured from redirected.
+test_wrapper_sends_one_mode_per_context() {
+  fixture
+  stand_in 'echo "mode=$WORKYTREE_SHELL" >&2; echo "$HOME"'
+  local code out
+  local -a modes
+  code="$(cat <<EOF
+WORKYTREE_BIN=$HOME/stand-in
+wt cd x
+x=\$(wt cd x)
+wt cd x | cat
+wt cd x > /dev/null
+( wt cd x ) > /dev/null
+zsh -f -c "source '$SHELL_FILE'; WORKYTREE_BIN=$HOME/stand-in; wt cd x"
+EOF
+)"
+  out="$(pty_run "$code")"
+  modes=( ${(M)${(f)out}:#mode=*} )
+  assert_eq "$modes" "mode=terminal mode=captured mode=captured mode=redirected mode=captured mode=script"
+}
+
+test_ctrl_c_removes_the_runfile_and_keeps_the_users_exit_trap() {
+  fixture
+  stand_in 'echo STARTED >&2; sleep 30'
+  pty_start
+  pty_send "setopt posix_traps; trap 'print USER-EXIT-TRAP' EXIT; WORKYTREE_BIN=$HOME/stand-in"$'\n'
+  pty_send $'wt create app fix X --ai -y\n'
+  pty_wait STARTED
+  pty_send $'\x03'
+  sleep 0.5
+  pty_send $'print -r -- "RUNFILES=$(ls "$TMPDIR" | grep -c "^workytree-ai\\.")"; exit\n'
+  pty_finish
+  assert_contains "$WT_PTY_OUT" "RUNFILES=0"
+  assert_contains "$WT_PTY_OUT" "USER-EXIT-TRAP"
+}
+
+test_ctrl_c_after_the_cwd_was_deleted_lands_in_an_existing_directory() {
+  fixture
+  mkdir -p "$HOME/wts/app/fix/GONE"
+  stand_in 'rm -rf "$PWD"; echo REMOVED >&2; sleep 30'
+  pty_start
+  pty_send "WORKYTREE_BIN=$HOME/stand-in; cd ~/wts/app/fix/GONE"$'\n'
+  pty_send $'wt remove app fix GONE -y\n'
+  pty_wait REMOVED
+  pty_send $'\x03'
+  sleep 0.5
+  pty_send $'print -r -- "NOW=$PWD"; exit\n'
+  pty_finish
+  assert_contains "$WT_PTY_OUT" "workytree: your shell's directory was removed; moved to $HOME/wts/app/fix"
+  assert_contains "$WT_PTY_OUT" "NOW=$HOME/wts/app/fix"
 }
 
 run_tests

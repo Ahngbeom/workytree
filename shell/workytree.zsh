@@ -1,156 +1,93 @@
-# workytree shell integration — source this from ~/.zshrc.
-# Defines workytree() (and wt() unless disabled) so `create`/`cd` can change the caller's
-# directory. bin/workytree is a pure CLI (computes, prints, never cd's); for `create`/`cd`
-# the LAST stdout line is the resulting path (see bin/workytree's header comment) — this
-# wrapper captures stdout, replays everything except that last line, and `builtin cd`s to it
-# when running interactively. :A resolves a symlink (the installer creates
-# ~/.local/bin/workytree as a symlink to bin/workytree; `wt` itself is never a symlink, only
-# the function this file defines below), so WORKYTREE_ROOT still lands on the real install
-# directory rather than the symlink's own parent.
+# workytree shell integration — source this from ~/.zshrc. Defines workytree() (and wt())
+# so create/cd/remove/status can move the caller's shell: bin/workytree prints the path as its
+# last stdout line, and workytree() cds there. Modes and the CLI protocol: docs/superpowers/
+# specs/2026-10-23-noninteractive-ux-design.md.
 typeset -g WORKYTREE_ROOT="${${(%):-%x}:A:h:h}"
 typeset -g WORKYTREE_BIN="$WORKYTREE_ROOT/bin/workytree"
 
-# _workytree_locate_subcommand <args...>: prints the 1-based index of the first token that
-# isn't one of bin/workytree's own global options, or 0 if every token is consumed as an
-# option (no subcommand present). Mirrors bin/workytree's parse_global_opts token-for-token
-# (a bare --project consumes the NEXT token as its value; --project=value/--yes/-y/--no-color
-# are each a single token) so the wrapper and the CLI always agree on which token is the
-# subcommand. R34: the CLI accepts these options in ANY position -- a wrapper that only ever
-# looked at "$1" would silently skip the auto-cd for e.g. `wt --project foo create ...`.
-_workytree_locate_subcommand() {
-  local -i i=1 skip=0
-  local a
+# workytree() must not call a `_`-prefixed helper or rely on a non-exported global: shell
+# snapshots (Claude Code's Bash tool) keep only workytree() and wt(). No `emulate -L`: it would
+# drop the caller's cd options (auto_pushd, chase_links) for the final cd.
+workytree() {
+  setopt localoptions noksharrays noshwordsplit
+  local bin="${WORKYTREE_BIN:-}"
+  [[ -n "$bin" && -x "$bin" ]] || bin="${commands[workytree]:-}"
+  if [[ -z "$bin" ]]; then
+    print -u2 -r -- "workytree: not found on PATH (install it, or set WORKYTREE_BIN)"
+    return 127
+  fi
+  local mode=script
+  if [[ -o interactive ]]; then
+    if [[ -t 1 ]]; then mode=terminal
+    elif (( ZSH_SUBSHELL )); then mode=captured
+    else mode=redirected; fi
+  fi
+  # Mirrors parse_global_opts and cmd_create token for token: the first token that is not a
+  # global option is the subcommand, and `--` ends create's own flags.
+  local sub="" a
+  local -i skip=0 dashdash=0 want_ai=0 plain=0
   for a in "$@"; do
-    if (( skip )); then
-      skip=0
-    else
+    [[ "$a" == --no-color ]] && plain=1
+    if (( skip )); then skip=0
+    elif [[ -z "$sub" ]]; then
       case "$a" in
-        --project)              skip=1 ;;
+        --project) skip=1 ;;
         --project=*|--yes|-y|--no-color) ;;
-        *) print -r -- "$i"; return 0 ;;
+        *) sub="$a" ;;
+      esac
+    elif (( ! dashdash )); then
+      case "$a" in
+        --) dashdash=1 ;;
+        --ai) want_ai=1 ;;
       esac
     fi
-    (( i++ ))
   done
-  print -r -- 0
-}
-
-# _workytree_has_ai_flag <args...>: true if this command line opts into an AI session via
-# --ai. Mirrors cmd_create's own filtering (lib/cmd/create.zsh) token for token: only `--ai`
-# counts, and a `--` ends option parsing so a later `--ai` is a positional, not the flag. If
-# this scan and the CLI's ever disagreed, the wrapper would arm the execution channel for a
-# run the CLI treats as opted out, or leave it unarmed for one the CLI expects to use.
-_workytree_has_ai_flag() {
-  local a
-  for a in "$@"; do
-    case "$a" in
-      --)   return 1 ;;
-      --ai) return 0 ;;
-    esac
-  done
-  return 1
-}
-
-workytree() {
-  local -i sub_idx
-  sub_idx="$(_workytree_locate_subcommand "$@")"
-  local sub=""
-  (( sub_idx > 0 )) && sub="${@[$sub_idx]}"
-  case "$sub" in
-    create|cd|remove|status) ;;
-    *) "$WORKYTREE_BIN" "$@"; return $? ;;
-  esac
-  local -a call_args; call_args=("$@")
-  # cd's output is byte-identical to path's today (lib/cmd/path.zsh: `cmd_cd() { cmd_path
-  # "$@"; }`), but "path" is the name documented as script-safe, so substitute it in place of
-  # whichever token _workytree_locate_subcommand found -- not necessarily "$1", now that
-  # global options can precede it (R34). A future divergence between cmd_cd and cmd_path then
-  # stays the CLI's decision, not a side effect of which subcommand name the wrapper happened
-  # to invoke.
-  [[ "$sub" == cd ]] && call_args[$sub_idx]=path
-  # AI-session launch channel. bin/workytree never runs the agent itself -- it only writes
-  # "what to run" into this file. That keeps the CLI pure, while the TTY an interactive
-  # agent needs comes from here instead. The file is created by this function and removed
-  # by this function: if the CLI did its own mktemp, who removes it and when would become
-  # unclear, and the file would be left behind whenever the CLI process died.
-  #
-  # An EXIT trap set inside a zsh function is local to that function and fires when the
-  # function returns -- the agent runs inside this function, so the trap fires after it.
-  # rm -f is idempotent, so the explicit removal below and the trap firing again afterward
-  # (already gone) is harmless.
-  #
-  # The trap body must bind $runfile's VALUE now, not defer its expansion to when the trap
-  # fires: `trap 'cmd "$runfile"' EXIT` (single quotes) leaves the variable reference intact
-  # in the trap string, and zsh only expands it at fire time -- by then this function has
-  # already returned and its `local runfile` has gone out of scope, so the trap runs with an
-  # EMPTY value and deletes nothing. `${(q)runfile}` interpolates the value immediately, into
-  # a shell-quoted literal safe to re-parse later, so the trap still targets the right path
-  # even after `runfile` no longer exists. Plain double quotes (`trap "cmd $runfile" EXIT`)
-  # would expand at the right time but NOT re-quote -- `$TMPDIR` is user-controlled (mktemp
-  # is rooted at it), so a space or quote character in that path would either split into
-  # extra words or break the trap string outright; `${(q)}` is what makes the substitution
-  # safe against that.
-  # Arm the channel only when this user has actually opted in. The file the wrapper creates
-  # here is an execution channel -- whatever ends up in it runs in the interactive shell after
-  # the cd -- so creating one on every `create` handed a channel to people who never enabled
-  # the feature: a repo's post-checkout hook, which runs inside `git worktree add`, could find
-  # it by globbing $TMPDIR and get a command run there.
-  #
-  # Unsetting WORKYTREE_AI_RUNFILE from the CLI's environment (bin/workytree) hides the path,
-  # but hiding it is not the same as closing the channel: on Linux a same-user hook can read
-  # the CLI's exec-time environment through /proc/<pid>/environ, and reach an open descriptor
-  # through /proc/<pid>/fd. So no in-process channel can be made unforgeable against a hook
-  # that already runs as the user -- the achievable property is that the channel does not
-  # exist at all unless the feature is in use, which is what this gate provides.
-  #
-  # _WORKYTREE_AI_CONFIGURED is resolved once when this file is sourced, the same shape
-  # _workytree_alias_enabled uses and with the same consequence: changing `ai_session` takes
-  # effect in the next shell. Per-command freshness would mean spawning the CLI an extra time
-  # on every `create`.
-  local runfile=""
-  if [[ "$sub" == create ]] && { (( _WORKYTREE_AI_CONFIGURED )) || _workytree_has_ai_flag "$@" }; then
-    runfile="$(command mktemp "${TMPDIR:-/tmp}/workytree-ai.XXXXXX" 2>/dev/null)" || runfile=""
-    [[ -n "$runfile" ]] && trap "command rm -f -- ${(q)runfile}" EXIT
+  if [[ "$mode" == script || "$sub" != (create|cd|remove|status) ]]; then
+    WORKYTREE_SHELL=$mode "$bin" "$@"
+    return
   fi
 
-  local output exit_code target head
-  if [[ -n "$runfile" ]]; then
-    output="$(WORKYTREE_AI_RUNFILE="$runfile" "$WORKYTREE_BIN" "${call_args[@]}")"
-  elif [[ "$sub" == remove && -o interactive ]]; then
-    output="$(WORKYTREE_CD_CAPABLE=1 "$WORKYTREE_BIN" "${call_args[@]}")"
-  # status opens fzf only when its output reaches a terminal; `wt status | grep` must get the
-  # table, so the capability is not claimed when this function's own stdout is a pipe.
-  elif [[ "$sub" == status && -o interactive && -t 1 ]]; then
-    output="$(WORKYTREE_CD_CAPABLE=1 "$WORKYTREE_BIN" "${call_args[@]}")"
-  else
-    output="$("$WORKYTREE_BIN" "${call_args[@]}")"
-  fi
-  exit_code=$?
-  # Split "everything except the last line" from "the last line" without a `path`/`fpath`
-  # local (R16: `path` is tied to $PATH in zsh, even as a local). Works for empty output, a
-  # single-line output (target only), and multi-line output (info lines + target).
-  if [[ -n "$output" ]]; then
+  local runfile="" output target
+  local -i rc
+  {
+    if [[ "$sub" == create ]] && (( want_ai || ${_WORKYTREE_AI_CONFIGURED:-0} )); then
+      runfile="$(command mktemp "${TMPDIR:-/tmp}/workytree-ai.XXXXXX" 2>/dev/null)" || runfile=""
+    fi
+    output="$(WORKYTREE_SHELL=$mode WORKYTREE_AI_RUNFILE=$runfile "$bin" "$@")"
+    rc=$?
+    if (( rc )); then
+      [[ -n "$output" ]] && print -r -- "$output"
+      return $rc
+    fi
     target="${output##*$'\n'}"
-    head="${output%"$target"}"; head="${head%$'\n'}"
-    [[ -n "$head" ]] && print -r -- "$head"
-  fi
-  (( exit_code == 0 )) || return $exit_code
-  if [[ -o interactive && -n "$target" && -d "$target" ]]; then
+    [[ "$output" == *$'\n'* ]] && print -r -- "${output%$'\n'*}"
+    if [[ -z "$target" || ! -d "$target" ]]; then
+      [[ -n "$target" ]] && print -r -- "$target"
+      return 0
+    fi
     builtin cd -- "$target" || return 1
-    print -P "%F{70}cd:%f $target"
-    # Run after the cd -- the agent must see the new worktree as its cwd. A plain call, not
-    # exec, so quitting the agent returns the user to a shell inside that worktree.
+    if [[ "$mode" != terminal ]]; then
+      print -r -- "$target"
+    elif (( ! plain )) && [[ -z "${NO_COLOR:-}" && "${TERM:-}" != dumb ]]; then
+      print -r -- $'\e[38;5;70mcd:\e[0m '"$target"
+    else
+      print -r -- "cd: $target"
+    fi
     if [[ -n "$runfile" && -s "$runfile" ]]; then
       local -a ai_cmd; ai_cmd=( ${(f)"$(<"$runfile")"} )
       command rm -f -- "$runfile"
       (( ${#ai_cmd} )) && "${ai_cmd[@]}"
     fi
-  elif [[ -n "$target" ]]; then
-    print -r -- "$target"
-  fi
-  # create still succeeds even if the agent exits nonzero -- the worktree was created, and
-  # that fact was already reported to the user.
-  return 0
+    return 0
+  } always {
+    [[ -n "$runfile" ]] && command rm -f -- "$runfile"
+    if [[ ! -d "$PWD" ]]; then
+      local up="${PWD:h}"
+      while [[ "$up" != / && ! -d "$up" ]]; do up="${up:h}"; done
+      builtin cd -- "$up" 2>/dev/null \
+        && print -u2 -r -- "workytree: your shell's directory was removed; moved to $up"
+    fi
+  }
 }
 
 # R35: this file must NOT contain a literal `wt() { ... }` anywhere, even inside a branch
