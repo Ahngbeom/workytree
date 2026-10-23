@@ -576,4 +576,16 @@ test_branch_force_flag_deletes_a_branch_that_moved_after_the_verdict() {
   assert_eq "${out//moved since it was checked/}" "$out" "no moved warning under -B"
 }
 
+
+test_remote_delete_is_logged_and_restorable() {
+  fixture
+  local sha; sha="$(git -C "$HOME/src/app" rev-parse fix/T)"
+  wt remove app fix T -b -r -y >/dev/null 2>&1
+  local log; log="$(<"$HOME/.local/state/workytree/deleted.log")"
+  local want="git -C $HOME/src/app push origin ${sha}:refs/heads/fix/T"
+  assert_contains "$log" $'\trefs/remotes/origin/fix/T\t'"$sha"$'\t'"$want"
+  eval "$want" 2>/dev/null
+  assert_contains "$(remote_branch fix/T)" fix/T restored-on-remote
+}
+
 run_tests

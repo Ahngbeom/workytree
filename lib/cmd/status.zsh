@@ -6,11 +6,11 @@
 typeset -gi WT_STATUS_MAX_JOBS=8
 typeset -g  WT_STATUS_FZF_MIN=0.38
 typeset -g  ST_REPO='' ST_HEADER=''
-typeset -gi ST_FETCH=0 ST_OFFLINE=0 ST_STALE_FILTER=0 ST_STALE_DAYS=-1 ST_JSON=0 ST_PLAIN=0 ST_PROGRESS=0
+typeset -gi ST_FETCH=0 ST_OFFLINE=0 ST_STALE_FILTER=0 ST_STALE_DAYS=-1 ST_JSON=0 ST_PLAIN=0 ST_PROGRESS=0 ST_BRANCHES=0
 typeset -ga ST_RECS ST_LINES
 
 _status_parse_opts() {
-  ST_REPO='' ST_FETCH=0 ST_OFFLINE=0 ST_STALE_FILTER=0 ST_STALE_DAYS=-1 ST_JSON=0 ST_PLAIN=0
+  ST_REPO='' ST_FETCH=0 ST_OFFLINE=0 ST_STALE_FILTER=0 ST_STALE_DAYS=-1 ST_JSON=0 ST_PLAIN=0 ST_BRANCHES=0
   while (( $# )); do
     case "$1" in
       --fetch)   ST_FETCH=1 ;;
@@ -20,9 +20,10 @@ _status_parse_opts() {
         [[ "${2:-}" == <-> ]] && { ST_STALE_DAYS=$2; shift; } ;;
       --json)    ST_JSON=1 ;;
       --plain)   ST_PLAIN=1 ;;
-      -*|*$'\t'*) usage_error "usage: workytree status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain]" ;;
+      --branches) ST_BRANCHES=1 ;;
+      -*|*$'\t'*) usage_error "usage: workytree status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain] [--branches]" ;;
       *)
-        [[ -z "$ST_REPO" ]] || usage_error "usage: workytree status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain]"
+        [[ -z "$ST_REPO" ]] || usage_error "usage: workytree status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain] [--branches]"
         ST_REPO="$1" ;;
     esac
     shift
@@ -48,8 +49,42 @@ _status_targets() {
     local r; r="$(resolve_repo "$ST_REPO")" || exit $?
     print -r -- "$ST_REPO"$'\t'"${r%%$'\t'*}"$'\t'"${r#*$'\t'}"
   else
-    all_repos "$WT_PROJECT_OPT"
+    local all; all="$(all_repos "$WT_PROJECT_OPT")" || return $?
+    _status_unique_repos "$all"
   fi
+}
+
+# _status_unique_repos <target lines>: one line per git common dir. A linked worktree scanned
+# as a repo shares the main checkout's common dir; the line whose .git is a directory wins,
+# else the first line. Winners keep their input order.
+_status_unique_repos() {
+  local -a lines keys
+  lines=("${(@f)1}")
+  local -A owner is_main
+  local -i i=0 j
+  local line rp key dir_git
+  for line in "${lines[@]}"; do
+    (( ++i ))
+    [[ -n "$line" ]] || continue
+    rp="${${(@ps:\t:)line}[3]}"
+    key="$(git -C "$rp" rev-parse --git-common-dir 2>/dev/null)" || key=''
+    if [[ -n "$key" && "$key" != *$'\n'* ]]; then
+      [[ "$key" == /* ]] || key="$rp/$key"
+      key="${key:A}"
+    else
+      key="$rp"
+    fi
+    keys[i]="$key"
+    dir_git=0; [[ -d "$rp/.git" ]] && dir_git=1
+    if [[ -z "${owner[$key]:-}" ]]; then
+      owner[$key]=$i is_main[$key]=$dir_git
+    elif (( dir_git && ! is_main[$key] )); then
+      owner[$key]=$i is_main[$key]=1
+    fi
+  done
+  for (( j = 1; j <= ${#lines}; j++ )); do
+    [[ -n "${lines[$j]}" && "${owner[${keys[$j]}]:-}" == $j ]] && print -r -- "${lines[$j]}"
+  done
 }
 
 # _status_collect_one <name> <project> <repo_path> <stale_days> <out_prefix>: one repo's
@@ -60,8 +95,12 @@ _status_collect_one() {
     if (( ST_FETCH )); then
       wt_fetch_origin "$rp" >/dev/null 2>&1 || print -u2 -r -- "could not fetch origin; showing local refs"
     fi
-    (( ST_OFFLINE )) || forge_pr_rows "$rp" > "$out.prs"
-    status_collect_repo "$project" "$name" "$rp" "$days" "$out.prs" > "$out.rows"
+    (( ST_OFFLINE )) || forge_pr_rows "$rp" "$out.prs" > "$out.prs"
+    if (( ST_BRANCHES )); then
+      status_collect_branches "$project" "$name" "$rp" "$days" "$out.prs" > "$out.rows"
+    else
+      status_collect_repo "$project" "$name" "$rp" "$days" "$out.prs" > "$out.rows"
+    fi
   } 2> "$out.notes"
 }
 
@@ -104,18 +143,19 @@ _status_collect() {
   rm -rf "$tmp"
 }
 
-# _status_sort: records on stdin -> worktrees, branches, orphans, main checkouts, errors;
-# oldest first within each (activity, or last commit for branches; unknown last). Main
+# _status_sort: records on stdin -> worktrees, orphans, main checkouts, errors;
+# oldest first within each (activity; unknown last). Main
 # checkouts are never cleanup candidates, so they go below the rows that are.
 _status_sort() {
+  if (( ST_BRANCHES )); then cat; return; fi
   local line ts
   local -a f
   local -i rank
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     f=("${(@ps:\t:)line}")
-    case "${f[1]}" in worktree) rank=1 ;; branch) rank=2 ;; orphan) rank=3 ;; main) rank=4 ;; *) rank=5 ;; esac
-    ts="${f[11]}"; [[ "${f[1]}" == branch ]] && ts="${f[13]}"
+    case "${f[1]}" in worktree) rank=1 ;; orphan) rank=2 ;; main) rank=3 ;; *) rank=4 ;; esac
+    ts="${f[11]}"
     [[ "$ts" == <-> ]] || ts=9999999999
     print -r -- "$rank"$'\t'"$ts"$'\t'"$line"
   done | sort -t $'\t' -k1,1n -k2,2n -s | cut -f3-
@@ -126,7 +166,11 @@ _status_filter() {
   local -a f
   while IFS= read -r line; do
     f=("${(@ps:\t:)line}")
-    (( ! ST_STALE_FILTER )) || [[ "${f[9]}" == (safe|stale) ]] && print -r -- "$line"
+    if (( ST_BRANCHES )); then
+      (( ! ST_STALE_FILTER )) || [[ "${f[11]:-}" == safe || "${f[10]:-}" == stale ]] && print -r -- "$line"
+    else
+      (( ! ST_STALE_FILTER )) || [[ "${f[9]}" == (safe|stale) ]] && print -r -- "$line"
+    fi
   done
   return 0
 }
@@ -198,7 +242,7 @@ _status_print_notes() {
 _status_render_table() {
   local records="$1" notes_file="$2"
   if [[ -z "$records" ]]; then
-    warn "no worktrees or branches found"
+    warn "no worktrees found"
   else
     _status_format "$records"
     print -r -- "$ST_HEADER"
@@ -291,16 +335,21 @@ cmd_status() {
   [[ -t 2 ]] && ST_PROGRESS=1
   notes_file="$(mktemp 2>/dev/null)" || die "could not create a temp file"
   records="$(_status_records "$notes_file")" || { rc=$?; rm -f "$notes_file"; exit $rc; }
-  if (( ST_JSON )); then _status_render_json "$records" "$notes_file"
+  if (( ST_JSON )); then
+    if (( ST_BRANCHES )); then _branches_render_json "$records" "$notes_file"
+    else _status_render_json "$records" "$notes_file"; fi
   elif (( interactive )); then _status_run_fzf "$records" "$notes_file"
+  elif (( ST_BRANCHES )); then _branches_render_table "$records" "$notes_file"
   else _status_render_table "$records" "$notes_file"; fi
   rm -f "$notes_file"
 }
 
-# __status-rows [status options]: the fzf input for a reload.
+# __status-rows [status options]: the fzf input for a reload. Under _status_run_fzf it also
+# creates $WT_STATUS_RELOADED, so the other mode's cached rows are collected again.
 cmd___status-rows() {
   require_config
   _status_parse_opts "$@"
+  [[ -n "${WT_STATUS_RELOADED:-}" ]] && : > "$WT_STATUS_RELOADED"
   ui_init force
   local notes_file records
   local -i rc
@@ -308,7 +357,7 @@ cmd___status-rows() {
   records="$(_status_records "$notes_file")" || { rc=$?; rm -f "$notes_file"; exit $rc; }
   rm -f "$notes_file"
   [[ -n "$records" ]] || return 0
-  _status_format "$records"
+  if (( ST_BRANCHES )); then _branches_format "$records"; else _status_format "$records"; fi
   _status_fzf_input
 }
 
@@ -338,37 +387,73 @@ _status_reload_args() {
   return 0
 }
 
-_status_run_fzf() {
-  local records="$1" notes_file="$2" bin="$WORKYTREE_HOME/bin/workytree" line sel here_repo='' l
-  local -a f args
+# _status_here_repo <worktree records>: REPLY = the repo whose worktree this shell stands in,
+# where the wrapper should send the shell if ctrl-d removes that worktree out from under it.
+_status_here_repo() {
+  local line
+  local -a f
   local -i best=0
-  # The repo whose worktree this shell stands in: where the wrapper should send the shell if
-  # ctrl-d removes that worktree out from under it.
-  for line in "${(@f)records}"; do
+  REPLY=''
+  for line in "${(@f)1}"; do
     f=("${(@ps:\t:)line}")
     [[ "${f[1]}" == (main|worktree) && "${PWD:A}/" == "${f[5]:A}/"* ]] || continue
-    (( ${#f[5]} > best )) && { best=${#f[5]}; here_repo="${f[4]}"; }
+    (( ${#f[5]} > best )) && { best=${#f[5]}; REPLY="${f[4]}"; }
   done
-  _status_reload_args; args=("${reply[@]}")
-  local qbin="${(q)bin}"
-  local rows_cmd="$qbin __status-rows${args:+ ${(j: :)${(q)args[@]}}}"
+}
+
+# _status_run_fzf <records> <notes_file>: the fzf list, starting in the mode ST_BRANCHES
+# names; ctrl-b (an --expect key) ends one fzf and starts the other mode's.
+_status_run_fzf() {
+  local records="$1" bin="$WORKYTREE_HOME/bin/workytree" mode=worktrees out key sel header l here_repo=''
+  local -a f margs
+  local -A recs notes
+  local -i rc
+  local -i ST_FETCH=0 ST_BRANCHES=$ST_BRANCHES
+  (( ST_BRANCHES )) && mode=branches
+  recs[$mode]="$records" notes[$mode]="$2"
+  local tmp; tmp="$(mktemp -d 2>/dev/null)" || die "could not create a temp directory"
+  _status_reload_args
+  local qbin="${(q)bin}" qargs="${reply:+ ${(j: :)${(q)reply[@]}}}"
+  local rows_cmd="$qbin __status-rows$qargs"
   local fetch_cmd="$rows_cmd"; (( ST_OFFLINE )) || fetch_cmd+=" --fetch"
-  local header="enter: cd · ctrl-d: remove · ctrl-o: open PR · ctrl-r: refresh with fetch · ctrl-s: stale only · ctrl-/: layout"
-  _status_format "$records"
-  header+=$'\n'"$ST_HEADER"
-  if [[ -s "$notes_file" ]]; then
-    while IFS= read -r l; do header+=$'\n'"note: $l"; done < "$notes_file"
-  fi
-  # fzf runs bindings through $SHELL -c, and they are written for sh, not the user's shell.
-  sel="$(_status_fzf_input | SHELL=/bin/sh fzf --ansi --no-sort --layout=reverse \
-    --delimiter=$'\t' --with-nth=27 --header="$header" \
-    --preview="$qbin __status-preview {}" --preview-window='right,50%,<100(down,50%)' \
-    --bind="ctrl-d:execute($qbin __status-action remove {})+reload($rows_cmd)" \
-    --bind="ctrl-o:execute-silent($qbin __status-action open {})" \
-    --bind="ctrl-r:reload($fetch_cmd)" \
-    --bind='ctrl-/:change-preview-window(down,50%|right,50%)' \
-    --bind="ctrl-s:transform-query(if [ {q} = stale ]; then echo; else echo stale; fi)")"
-  if [[ -n "$sel" ]]; then
+  while :; do
+    [[ -e "$tmp/reloaded" ]] && { recs=() notes=(); rm -f "$tmp/reloaded"; }
+    ST_BRANCHES=0; [[ "$mode" == branches ]] && ST_BRANCHES=1
+    if (( ! ${+recs[$mode]} )); then
+      notes[$mode]="$tmp/notes.$mode"; : > "${notes[$mode]}"
+      recs[$mode]="$(_status_records "${notes[$mode]}")" || { rc=$?; rm -rf "$tmp"; return $rc; }
+    fi
+    if [[ "$mode" == branches ]]; then
+      _branches_format "${recs[$mode]}"
+      _branches_fzf_args "$qbin" "$qargs"; margs=("${reply[@]}") header="$REPLY"
+    else
+      [[ -z "$here_repo" ]] && { _status_here_repo "${recs[$mode]}"; here_repo="$REPLY"; }
+      _status_format "${recs[$mode]}"
+      header="enter: cd · ctrl-d: remove · ctrl-o: open PR · ctrl-r: refresh with fetch · ctrl-s: stale only · ctrl-/: layout · ctrl-b: branches"
+      margs=(--with-nth=27 --preview="$qbin __status-preview {}"
+        --bind="ctrl-d:execute($qbin __status-action remove {})+reload($rows_cmd)"
+        --bind="ctrl-o:execute-silent($qbin __status-action open {})"
+        --bind="ctrl-r:reload($fetch_cmd)"
+        --bind="ctrl-s:transform-query(if [ {q} = stale ]; then echo; else echo stale; fi)")
+    fi
+    header+=$'\n'"$ST_HEADER"
+    if [[ -s "${notes[$mode]}" ]]; then
+      while IFS= read -r l; do header+=$'\n'"note: $l"; done < "${notes[$mode]}"
+    fi
+    # fzf runs bindings through $SHELL -c, and they are written for sh, not the user's shell.
+    out="$(_status_fzf_input | WT_STATUS_RELOADED="$tmp/reloaded" SHELL=/bin/sh fzf --ansi --no-sort \
+      --layout=reverse --delimiter=$'\t' --header="$header" --expect=ctrl-b \
+      --preview-window='right,50%,<100(down,50%)' \
+      --bind='ctrl-/:change-preview-window(down,50%|right,50%)' "${margs[@]}")"
+    rc=$?
+    key="${out%%$'\n'*}"
+    # fzf exits 1 on ctrl-b over an empty list, so the key decides, not the exit status.
+    [[ "$key" == ctrl-b ]] || break
+    [[ "$mode" == branches ]] && mode=worktrees || mode=branches
+  done
+  rm -rf "$tmp"
+  sel=''; [[ "$out" == *$'\n'* ]] && sel="${out#*$'\n'}"
+  if (( rc == 0 )) && [[ "$mode" == worktrees && -z "$key" && -n "$sel" ]]; then
     f=("${(@ps:\t:)sel}")
     if [[ "${f[1]}" == (main|worktree) && -d "${f[5]}" ]]; then print -r -- "${f[5]}"; return 0; fi
   fi
@@ -398,7 +483,7 @@ cmd___status-preview() {
   [[ "$p" != - ]] && print -r -- "path      $p"
   if [[ "$type" == error ]]; then print -r -- "error     ${f[26]}"; return 0; fi
   [[ "$type" == (main|worktree) ]] && print -r -- "created   $(_status_when "${f[12]}")"
-  [[ "$type" != branch ]] && print -r -- "active    $(_status_when "${f[11]}")"
+  print -r -- "active    $(_status_when "${f[11]}")"
   if [[ "$br" != - ]]; then
     created="$(git -C "$repo_path" reflog show --date=unix --format=%gd "refs/heads/$br" -- 2>/dev/null | tail -1)"
     created="${${created##*\{}%\}}"
@@ -423,10 +508,6 @@ cmd___status-preview() {
       fi
       print; print -r -- "recent commits:"
       git -C "$p" log --oneline -5 2>/dev/null | sed 's/^/  /' ;;
-    branch)
-      print; print -r -- "recent commits:"
-      git -C "$repo_path" log --oneline -5 "refs/heads/$br" -- 2>/dev/null | sed 's/^/  /'
-      print; print -r -- "delete it yourself: git -C ${(q)repo_path} branch -d ${(q)br}" ;;
     orphan)
       print
       if dir_is_cruft_only "$p"; then print -r -- "holds only IDE/OS files; \`wt prune ${f[3]}\` removes it"
@@ -447,17 +528,26 @@ _status_pause() {
 }
 
 # __status-action remove|open <fzf line>: what ctrl-d / ctrl-o do to the highlighted row.
+# __status-action delete-branches <file> [status options]: alt-d over the marked branch rows
+# that fzf wrote to <file>.
 cmd___status-action() {
   local action="${1:-}"
+  if [[ "$action" == delete-branches ]]; then
+    (( $# >= 2 )) || usage_error "usage: workytree __status-action remove|open <record> | delete-branches <file> [status options]"
+    local file="$2"; shift 2
+    require_config
+    _status_parse_opts "$@"
+    _branches_delete "$file"
+    return 0
+  fi
   local -a f; f=("${(@ps:\t:)${2:-}}")
-  (( ${#f} >= 26 )) || usage_error "usage: workytree __status-action remove|open <record>"
+  (( ${#f} >= 26 )) || usage_error "usage: workytree __status-action remove|open <record> | delete-branches <file> [status options]"
   case "$action" in
     remove)
       if [[ "${f[1]}" == worktree && "${f[6]}" != - ]]; then
         ( WT_PROJECT_OPT="${f[2]}"; builtin cd -- "${f[4]}" 2>/dev/null; cmd_remove "${f[3]}" "${f[6]}" "${f[7]}" )
       else
         warn "only worktrees under worktree_root can be removed from here"
-        [[ "${f[1]}" == branch ]] && hint "delete the branch yourself: git -C ${(q)f[4]} branch -d ${(q)f[8]}"
         [[ "${f[1]}" == orphan ]] && hint "wt prune ${f[3]} removes orphan directories that hold only IDE/OS files"
       fi
       _status_pause ;;
@@ -466,7 +556,7 @@ cmd___status-action() {
       if (( $+commands[open] )); then open "${f[25]}"
       elif (( $+commands[xdg-open] )); then xdg-open "${f[25]}" >/dev/null 2>&1
       fi ;;
-    *) usage_error "usage: workytree __status-action remove|open <record>" ;;
+    *) usage_error "usage: workytree __status-action remove|open <record> | delete-branches <file> [status options]" ;;
   esac
   return 0
 }

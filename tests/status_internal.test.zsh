@@ -1,9 +1,10 @@
 #!/usr/bin/env zsh
 # lib/status.zsh and lib/cmd/status.zsh internals, sourced directly.
 source "${0:A:h}/helpers.zsh"
-for f in ui config resolve worktree forge status; do source "$WT_TEST_ROOT/lib/$f.zsh"; done
+for f in ui config resolve worktree forge status branches; do source "$WT_TEST_ROOT/lib/$f.zsh"; done
 source "$WT_TEST_ROOT/lib/cmd/prune.zsh"
 source "$WT_TEST_ROOT/lib/cmd/status.zsh"
+source "$WT_TEST_ROOT/lib/cmd/status_branches.zsh"
 
 test_fmt_age_boundaries() {
   status_fmt_age 0; assert_eq "$REPLY" "<1h"
@@ -23,9 +24,11 @@ test_fmt_age_boundaries() {
 test_flag_table() {
   status_flag 1 0 - clean 0 1 0 0 10 100; assert_eq "$REPLY" safe      merged-clean
   status_flag 1 0 - idea-only 0 1 0 0 10 100; assert_eq "$REPLY" safe  idea-only-is-not-work
-  status_flag 0 1 - clean - 1 3 0 10 100; assert_eq "$REPLY" safe      gone
+  status_flag 0 1 - clean - 1 3 0 10 100; assert_eq "$REPLY" dirty     gone-unmerged-is-the-only-copy
+  status_flag 0 1 - clean - 1 0 0 10 100; assert_eq "$REPLY" -         gone-without-own-commits
   status_flag 0 0 merged clean 0 1 3 0 10 100; assert_eq "$REPLY" safe squash-merged-pr
-  status_flag 0 0 closed clean 0 1 3 0 10 100; assert_eq "$REPLY" safe closed-pr
+  status_flag 0 0 closed clean 0 1 3 0 10 100; assert_eq "$REPLY" -    closed-pr-is-not-safe
+  status_flag 0 0 closed clean 0 1 3 0 500 100; assert_eq "$REPLY" stale closed-pr-old
   status_flag 1 0 - real 0 1 0 0 10 100; assert_eq "$REPLY" dirty      uncommitted
   status_flag 1 0 - unknown 0 1 0 0 10 100; assert_eq "$REPLY" dirty   unknown-is-never-safe
   status_flag 1 0 - clean 2 1 0 0 10 100; assert_eq "$REPLY" dirty     unpushed
@@ -62,12 +65,11 @@ test_base_counts_without_ahead_behind_support() {
   make_repo "$HOME/src/app"
   typeset -ga WT_PROJECTS=(me)
   typeset -gA WT_PCFG=(me.repo_root "$HOME/src" me.worktree_root "$HOME/wts") WT_CFG=() WT_RCFG=()
-  git -C "$HOME/src/app" checkout -q -b topic
-  git -C "$HOME/src/app" commit -q --allow-empty -m one
-  git -C "$HOME/src/app" commit -q --allow-empty -m two
-  git -C "$HOME/src/app" checkout -q main
+  git -C "$HOME/src/app" worktree add -q -b topic "$HOME/wts/app/fix/topic"
+  git -C "$HOME/wts/app/fix/topic" commit -q --allow-empty -m one
+  git -C "$HOME/wts/app/fix/topic" commit -q --allow-empty -m two
   git() { [[ "$*" == *ahead-behind* ]] && { print -u2 "fatal: unknown field name: ahead-behind"; return 128; }; command git "$@"; }
-  local line; line="$(status_collect_repo me app "$HOME/src/app" 30 | grep $'^branch\t')"
+  local line; line="$(status_collect_repo me app "$HOME/src/app" 30 | grep $'^worktree\t')"
   unfunction git
   local -a f; f=("${(@ps:\t:)line}")
   assert_eq "${f[8]}" topic
@@ -106,6 +108,48 @@ test_stale_days_from_config_and_override() {
   ST_STALE_DAYS=-1
 }
 
+# old_git: git < 2.31, whose rev-parse echoes --path-format=absolute as an unknown argument.
+old_git() {
+  git() {
+    if [[ "$1" == -C && "$3" == rev-parse && " ${@[4,-1]} " == *" --path-format=absolute "* ]]; then
+      print -r -- --path-format=absolute
+      command git -C "$2" rev-parse "${(@)${@[4,-1]}:#--path-format=absolute}"; return
+    fi
+    command git "$@"
+  }
+}
+
+test_unique_repos_keeps_repos_apart_on_old_git() {
+  make_repo "$HOME/src/a"; make_repo "$HOME/src/b"
+  git -C "$HOME/src/a" worktree add -q "$HOME/src/a-wt" -b x
+  local in=$'awt\tme\t'"$HOME/src/a-wt"$'\na\tme\t'"$HOME/src/a"$'\nb\tme\t'"$HOME/src/b"
+  assert_eq "$(_status_unique_repos "$in" | cut -f1 | tr '\n' ' ')" "a b " current-git
+  assert_eq "$(old_git; _status_unique_repos "$in" | cut -f1 | tr '\n' ' ')" "a b " old-git
+}
+
+test_unique_repos_keys_unreadable_lines_by_path() {
+  make_repo "$HOME/src/a"; mkdir -p "$HOME/src/x" "$HOME/src/y"
+  local in=$'x\tme\t'"$HOME/src/x"$'\na\tme\t'"$HOME/src/a"$'\ny\tme\t'"$HOME/src/y"$'\nx2\tme\t'"$HOME/src/x"
+  assert_eq "$(_status_unique_repos "$in" | cut -f1 | tr '\n' ' ')" "x a y " not-a-repo
+  local two=$'a\tme\t'"$HOME/src/a"$'\nx\tme\t'"$HOME/src/x"
+  assert_eq "$(git() { [[ "$3" == rev-parse ]] && { print one; print two; return 0; }; command git "$@"; }
+    _status_unique_repos "$two" | cut -f1 | tr '\n' ' ')" "a x " multi-line-answer
+}
+
+test_collect_one_gives_the_forge_a_prefix() {
+  make_repo "$HOME/src/app"
+  git -C "$HOME/src/app" switch -q -c backup/AB-1-pre
+  git -C "$HOME/src/app" commit -q --allow-empty -m b
+  git -C "$HOME/src/app" switch -q main
+  forge_pr_rows() { [[ -n "${2:-}" ]] && : > "$2.truncated"; print -r -- $'fix/AB-1\t!5\tmerged\tu\tdead'; }
+  ST_BRANCHES=1 ST_OFFLINE=0 ST_FETCH=0
+  _status_collect_one app me "$HOME/src/app" 30 "$HOME/out"
+  assert_contains "$(<"$HOME/out.rows")" "backup of AB-1: PR list incomplete"
+  ST_BRANCHES=0
+  # unfunction would delete the real forge_pr_rows for every later test in this file.
+  source "$WT_TEST_ROOT/lib/forge.zsh"
+}
+
 # More repos than WT_STATUS_MAX_JOBS run in batches; output stays in config order.
 test_collect_keeps_config_order_across_batches() {
   local n
@@ -120,13 +164,11 @@ test_collect_keeps_config_order_across_batches() {
 
 test_sort_groups_types_then_oldest_first_with_main_checkouts_last() {
   local t=$'\t' d='-'
-  local rows="branch${t}p${t}r${t}rp${t}-${t}-${t}-${t}b1${t}-${t}-${t}-${t}-${t}200
-worktree${t}p${t}r${t}rp${t}/w2${t}-${t}-${t}w2${t}-${t}-${t}50${t}-${t}-
+  local rows="worktree${t}p${t}r${t}rp${t}/w2${t}-${t}-${t}w2${t}-${t}-${t}50${t}-${t}-
 orphan${t}p${t}r${t}rp${t}/o${t}-${t}-${t}-${t}-${t}-${t}10${t}-${t}-
 worktree${t}p${t}r${t}rp${t}/w1${t}-${t}-${t}w1${t}-${t}-${t}40${t}-${t}-
-branch${t}p${t}r${t}rp${t}-${t}-${t}-${t}b2${t}-${t}-${t}-${t}-${t}100
 main${t}p${t}r${t}rp${t}/m${t}-${t}-${t}m${t}-${t}-${t}1${t}-${t}-"
-  assert_eq "$(_status_sort <<< "$rows" | cut -f1,8 | tr '\t\n' ': ')" "worktree:w1 worktree:w2 branch:b2 branch:b1 orphan:- main:m "
+  assert_eq "$(_status_sort <<< "$rows" | cut -f1,8 | tr '\t\n' ': ')" "worktree:w1 worktree:w2 orphan:- main:m "
 }
 
 # A merged or closed PR vouches for a branch only while the branch still points at the PR's
@@ -140,16 +182,15 @@ test_pr_state_counts_only_at_the_pr_head() {
   git -C "$HOME/src/app" checkout -q main
   print -r -- "topic"$'\t'"#5"$'\t'merged$'\t'"https://x/5"$'\t'"$(git -C "$HOME/src/app" rev-parse topic)" > "$HOME/prs"
   local line; local -a f
-  line="$(status_collect_repo me app "$HOME/src/app" 30 "$HOME/prs" | grep $'^branch\t')"
+  line="$(status_collect_branches me app "$HOME/src/app" 30 "$HOME/prs" 2>/dev/null | grep $'^branch\t')"
   f=("${(@ps:\t:)line}")
-  assert_eq "${f[9]}" safe at-pr-head
+  assert_eq "${f[10]}" merged at-pr-head
   git -C "$HOME/src/app" checkout -q topic
   git -C "$HOME/src/app" commit -q --allow-empty -m after-the-merge
   git -C "$HOME/src/app" checkout -q main
-  line="$(status_collect_repo me app "$HOME/src/app" 30 "$HOME/prs" | grep $'^branch\t')"
+  line="$(status_collect_branches me app "$HOME/src/app" 30 "$HOME/prs" 2>/dev/null | grep $'^branch\t')"
   f=("${(@ps:\t:)line}")
-  assert_eq "${f[9]}" dirty commits-after-the-merge
-  assert_eq "${f[24]}" merged pr-state-still-shown
+  assert_eq "${f[10]}" unmerged commits-after-the-merge
 }
 
 # verdict_repo: app with a bare origin and one branch per verdict case. Local main stays
@@ -183,12 +224,12 @@ test_remove_and_status_share_the_merged_verdict() {
   verdict_repo
   forge_pr_rows() { cat "$HOME/prs"; }
   local rows b; local -a f; local -A tagged
-  rows="$(status_collect_repo me app "$HOME/src/app" 30 "$HOME/prs" | grep $'^branch\t')"
-  for b in "${(@f)rows}"; do f=("${(@ps:\t:)b}"); tagged[${f[8]}]=${f[14]}; done
-  for b in anc:merged:1 gone:merged:1 prtip:merged:1 push:pushed:0 prold:unmerged:0 local:unmerged:0; do
+  rows="$(status_collect_branches me app "$HOME/src/app" 30 "$HOME/prs" 2>/dev/null | grep $'^branch\t')"
+  for b in "${(@f)rows}"; do f=("${(@ps:\t:)b}"); tagged[${f[5]}]=${f[10]}; done
+  for b in anc:merged gone:merged prtip:merged push:pushed prold:unmerged local:unmerged; do
     branch_verdict "$HOME/src/app" "fix/${b%%:*}"
-    assert_eq "$REPLY" "${${b#*:}%:*}" "verdict fix/${b%%:*}"
-    assert_eq "${tagged[fix/${b%%:*}]}" "${b##*:}" "status merged fix/${b%%:*}"
+    assert_eq "$REPLY" "${b#*:}" "verdict fix/${b%%:*}"
+    assert_eq "$([[ ${tagged[fix/${b%%:*}]} == merged ]] && print 1 || print 0)" "$([[ $REPLY == merged ]] && print 1 || print 0)" "status merged fix/${b%%:*}"
   done
   assert_eq "$WT_VERDICT_BASE" origin/main base-name
   branch_verdict "$HOME/src/app" fix/prtip

@@ -22,7 +22,7 @@ flowchart LR
 | 기능 | 명령 | 하는 일 |
 |---|---|---|
 | 워크트리 만들기 | `wt create` | repo → kind → ticket → base를 묻고 `<kind>/<ticket>` 브랜치와 워크트리를 만든 뒤 그 디렉터리로 이동 |
-| 상태 보기 | `wt status` | 모든 워크트리·브랜치의 최근 활동, PR/MR, 지워도 되는지 여부를 fzf 목록으로 표시 |
+| 상태 보기 | `wt status` | 모든 워크트리의 최근 활동, PR/MR, 지워도 되는지 여부를 fzf 목록으로 표시 |
 | 워크트리 지우기 | `wt remove` | 변경 사항·로컬 브랜치·원격 브랜치를 하나씩 확인하고 지운 뒤 원하는 곳으로 이동 |
 | 정리 | `wt prune` | git이 잊은 워크트리 기록과 내용 없는 고아 디렉터리 정리 |
 | AI 세션 | `wt create --ai` | 새 워크트리에서 Claude Code 같은 코딩 에이전트를 바로 실행 (기본 꺼짐) |
@@ -112,7 +112,7 @@ wt create --ai fix PROJ-1          # 생성하고 이동한 뒤 AI 세션 실행
 wt create --no-ai fix PROJ-1       # 이번에는 AI 세션을 열지 않음
 wt cd server fix PROJ-1            # 없는 워크트리면 오류(종료 코드 1)
 wt list [repo] · wt repos · wt path [repo [kind [ticket]]]
-wt status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain]
+wt status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain] [--branches]
 wt remove                          # 대화형: 워크트리 선택 → 브랜치 → 이동할 곳 → 확인
 wt remove server fix PROJ-1        # 대화형: 브랜치 → 이동할 곳 → 확인
 wt remove server fix PROJ-1 [--force] [-b|-B] [-r] [--to <dir>] -y
@@ -145,16 +145,15 @@ wt config get|set|edit|path
 `wt status`는 범위 안의 repo(`--project` 또는 `[repo]` 하나)에서 다음을 모두 보여 준다.
 
 - 모든 워크트리
-- 워크트리가 없는 로컬 브랜치
 - `worktree_root` 아래에 있지만 git이 모르는 디렉터리
 
-fzf 0.38 이상이 있고 양쪽이 터미널이면 상세 창이 있는 fzf 목록을 연다. `--plain`, `-y`, fzf 없음·구버전, 출력 파이프·리다이렉트 중 하나라도 해당하면 표로 출력하고, `--json`은 같은 데이터를 스크립트용으로 출력한다. 보기만 할 뿐 정리·fetch(`--fetch` 제외)·삭제는 하지 않는다.
+fzf 0.38 이상이 있고 양쪽이 터미널이면 상세 창이 있는 fzf 목록을 연다. `--plain`, `-y`, fzf 없음·구버전, 출력 파이프·리다이렉트 중 하나라도 해당하면 표로 출력하고, `--json`은 같은 데이터를 스크립트용으로 출력한다. 보기만 할 뿐 정리·fetch(`--fetch` 제외)는 하지 않고, 삭제는 `ctrl-d`와 브랜치 모드의 `alt-d`로만 한다. 워크트리가 없는 브랜치는 `--branches`로 본다. 호환성: `--json`에서 `"type":"branch"` 행이 빠졌고, 같은 정보는 `--branches --json`으로 옮겼다.
 
 | 표시 | 뜻 |
 |---|---|
-| `✓` | 지워도 안전함: base 브랜치에 병합, PR/MR 병합·종료(브랜치가 PR 마지막 커밋을 가리킬 때), upstream 삭제 중 하나이면서 커밋 안 된 변경·push 안 된 커밋·잠금이 모두 없음 |
+| `✓` | 지워도 안전함: base 브랜치에 병합, PR/MR 병합(브랜치가 PR 마지막 커밋을 가리킬 때) 중 하나이면서 커밋 안 된 변경·push 안 된 커밋·잠금이 모두 없음 |
 | `●` | 오래됨: `stale_days`(기본 30일)보다 오래 손대지 않았지만 안전하다고 증명되지는 않음 |
-| `!` | 지우면 작업을 잃음: 커밋 안 된 변경(또는 확인 불가), upstream에 없는 커밋, upstream이 없으면 base에 없는 커밋 |
+| `!` | 지우면 작업을 잃음: 커밋 안 된 변경(또는 확인 불가), upstream에 없는 커밋, upstream이 없으면 base에 없는 커밋, upstream이 삭제됐는데 base에 없는 커밋 |
 
 | 키 | 동작 |
 |---|---|
@@ -164,12 +163,47 @@ fzf 0.38 이상이 있고 양쪽이 터미널이면 상세 창이 있는 fzf 목
 | `ctrl-r` | 모든 repo `git fetch` 후 새로고침 |
 | `ctrl-s` | `stale`/`safe` 행만 보기 (다시 누르면 전체) |
 | `ctrl-/` | 상세 창을 오른쪽 ↔ 아래로 전환 |
+| `ctrl-b` | 브랜치 모드로 전환 |
 
 - `ACTIVE`: 워크트리의 마지막 활동(index/HEAD), `COMMIT`: 브랜치의 마지막 커밋, 생성 시각: 상세 창
 - base 브랜치는 `origin/HEAD`, 없으면 `origin/main`이나 `origin/master`, 그것도 없으면 메인 checkout의 브랜치
 - 자기 커밋이 없는 브랜치는 "병합됨" 처리. 방금 만들고 커밋하지 않은 워크트리도 `✓`
 - 상세 창은 터미널이 100열 이상이면 오른쪽, 아니면 아래에 표시되고 창 크기 변경에 맞춰 이동
 - `✓`도 `git status`로 판단하므로 `remove`와 같은 사각지대가 있음: gitignore된 `.env` 같은 파일은 작업으로 치지 않음
+
+브랜치 모드(`ctrl-b`, 또는 `--branches`로 시작)는 워크트리가 없는 로컬 브랜치와 `origin` 브랜치를 이름별로 한 행에 보여 준다. 헤더에는 `origin` ref를 마지막으로 fetch한 시점(repo 중 가장 오래된 것)이 나온다.
+
+| 키 (브랜치 모드) | 동작 |
+|---|---|
+| `tab` / `shift-tab` | 행 표시·해제 |
+| `alt-d` | 표시한 행(없으면 현재 행) 삭제 후 표시를 지우고 새로고침 |
+| `ctrl-r` | 모든 repo `git fetch` 후 새로고침 |
+| `ctrl-s` | 등급이 `safe`인 행만 보기 (다시 누르면 전체) |
+| `ctrl-b` | 워크트리 목록으로 |
+| `enter`, 더블클릭 | 아무 동작 없음(목록 유지) |
+
+`alt-d`는 터미널로 나와 다음 순서로 진행하고, 키를 누르면 목록으로 돌아간다.
+
+1. 원격 쪽을 지우거나 `pushed`를 확인해야 하는 repo만 `origin`을 fetch한다. fetch가 실패한 repo는 원격을 건너뛰고 `pushed` 행을 needs force로 내린다
+2. 표시한 행을 지금 ref로 다시 판정해 safe / needs force / skipped 계획을 출력한다. 목록을 띄운 뒤 바뀐 것은 계획에 반영된다
+3. safe 묶음 전체를 한 번 묻고, needs force는 브랜치마다 잃을 커밋 수와 함께 따로 묻는다. 기본값은 모두 아니오
+4. 승인한 항목을 로컬 → 원격 순서로 지운다. 판정한 뒤 움직인 로컬 브랜치는 남기고, 원격은 판정한 커밋을 가리킬 때만 지운다(`--force-with-lease`)
+5. 지우는 동안 ref마다 복구 명령(성공)이나 git 메시지와 재시도 명령(실패)을 출력하고, 끝에 요약으로 `✓`(지움, `(was <sha>)`), `✗`(실패), `–`(남김) 행과 삭제 로그 경로를 출력한다
+
+| 등급 | 뜻 | 확인 |
+|---|---|---|
+| `merged` | base에 병합됐거나 PR/MR이 그 커밋 그대로 병합됨 | safe |
+| `pushed` | 로컬만 지움. 남겨 둘 `origin` 브랜치에 로컬 커밋이 모두 있음 | safe |
+| `backup` | 백업 이름(`backup/*`, `*-backup`, `*-backup-*`, `*-before-*`)이고, 이름의 티켓 키를 head에 가진 PR 중 병합된 것이 있고 열린 것이 없음. PR 목록이 조회 한도(GitHub 200건, GitLab 100건)를 채워 오래된 PR이 빠졌을 수 있으면 증명하지 않음. 백업에만 있는 커밋도 함께 지움 | safe |
+| `gone`, `stale`, `unmerged` | 병합이 증명되지 않음 | needs force |
+| `read-only`, `protected` | 동료 원격이나 PR이 열린 원격, `main`·`master`·`develop`·`release/*` | 지우지 않음 |
+
+- 한 행은 그 브랜치의 로컬과 본인 원격을 함께 지운다. 원격은 tip 작성자가 그 repo의 `user.email`(대소문자 무시)이고 base에 없는 커밋도 모두 본인 것일 때만 지우고, 아니면 로컬만 지운다
+- base에 없는 커밋이 하나도 없는 원격(base 커밋에서 갓 만든 브랜치, 머지된 브랜치)은 tip이 base 안에 있어 작성자로 소유를 알 수 없다. 같은 이름의 로컬 브랜치가 `origin/<b>`를 upstream으로 추적하고 tip 작성자가 본인일 때만 본인 것으로 보고, 아니면 `teammate`로 보아 원격은 지우지 않는다. base를 찾지 못한 repo에서는 원격을 지우지 않는다
+- 그 브랜치를 head로 한 PR/MR이 열려 있거나 draft이면 원격은 지우지 않는다(계획에 `PR <ref> is open`으로 skipped)
+- 로컬은 판정한 커밋을 가리킬 때 `git branch -D`로 지운다. squash 병합·백업 브랜치는 `-d`가 거부하기 때문이다
+- 지운 ref는 `~/.local/state/workytree/deleted.log`(`XDG_STATE_HOME`)에 시각·repo·ref·sha·복구 명령으로 남는다. 결과 화면이 사라져도 이 파일로 되살릴 수 있지만, 다른 ref에 없는 커밋은 git gc 유예(기본 2주)가 지나면 되살릴 수 없다
+- `--plain`, `-y`, 터미널 없음에서는 브랜치 모드도 표로만 출력하고 지우지 않는다
 
 PR/MR 정보는 repo마다 한 번씩 `gh`(GitHub)나 `glab`(GitLab, `glab`이 로그인한 self-hosted 포함)을 호출해 가져온다. 둘 다 없거나 `--offline`이면 PR 열만 비고 나머지는 그대로 동작한다. squash·rebase 병합은 git이 추적할 조상 관계를 남기지 않으므로, 그런 브랜치는 PR/MR을 조회할 수 있을 때만 병합됨으로 표시된다.
 
@@ -207,6 +241,7 @@ wt config set project.work.stale_days 60     # 한 프로젝트
 - `-b`만 줘도 원격 브랜치가 있으면 요약에 `remote branch  kept` 행이 나온다
 - 워크트리에 ticket 브랜치가 아닌 브랜치가 체크아웃돼 있으면 `-b`/`-B`/`-r`은 아무것도 지우지 않고 종료 코드 1로 멈춘다
 - 브랜치를 지우면 지우기 전 커밋을 `(was <sha>)`로 보여 주고, 되살리는 명령을 `hint:`로 알려 준다
+- 지운 브랜치는 `~/.local/state/workytree/deleted.log`(`XDG_STATE_HOME`)에 시각·repo·ref·sha·복구 명령으로 남는다. 다른 ref에 없는 커밋은 git gc 유예(기본 2주)가 지나면 되살릴 수 없다
 - 지금 있는 워크트리를 지우면 `--to`가 없는 한 원본 repo로 이동
 - 브랜치 삭제가 실패해도 종료 코드는 0이고 요약에 ✗ 행으로 남는다. 그 시점에 워크트리는 이미 지워진 상태
 - 원격 브랜치 삭제는 자격 증명을 묻지 않는다. 자격 증명이 없으면 ✗ 행과 힌트로 끝난다
@@ -330,6 +365,7 @@ teammate_mode   = auto,tmux,iterm2,in-process
 |---|---|
 | `WORKYTREE_CONFIG` | 설정 파일 경로 |
 | `XDG_CONFIG_HOME` | 기본 설정 위치(`$XDG_CONFIG_HOME/workytree/config`) |
+| `XDG_STATE_HOME` | 삭제 로그 위치(`$XDG_STATE_HOME/workytree/deleted.log`, 기본 `~/.local/state`) |
 | `NO_COLOR` | 색 끄기, `--no-color`와 같음 |
 | `VISUAL`, `EDITOR` | `config edit`가 여는 편집기 |
 | `WORKYTREE_ALIAS=0` | `wt` 함수를 만들지 않음 |

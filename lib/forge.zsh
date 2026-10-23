@@ -93,12 +93,16 @@ _forge_latest_per_branch() {
   for b in "${order[@]}"; do print -r -- "$b"$'\t'"${best[$b]}"; done
 }
 
-# forge_pr_rows <repo_path>: PR/MR rows for origin's repository. state is one of
+# forge_pr_rows <repo_path> [prefix]: PR/MR rows for origin's repository. state is one of
 # open|draft|merged|closed; ref is "#N" (GitHub) or "!N" (GitLab); head_sha is the PR's last
-# commit.
+# commit. With prefix, also writes every row the forge returned, updated_at as a sixth column,
+# to <prefix>.all, and creates <prefix>.truncated when that was a full page, so older PRs may
+# be missing.
 forge_pr_rows() {
-  local repo_path="$1" url host rpath kind out
-  local -i rc
+  local repo_path="$1" prefix="${2:-}" url host rpath kind out
+  local -i rc limit
+  local -a rows
+  [[ -n "$prefix" ]] && rm -f -- "$prefix.all" "$prefix.truncated"
   # No origin is not a failure: there is simply nothing to look up.
   url="$(git -C "$repo_path" remote get-url origin 2>/dev/null)" || return 0
   forge_host_path "$url" || { print -u2 -r -- "cannot parse origin URL ($url); PR lookup skipped"; return 1; }
@@ -108,13 +112,15 @@ forge_pr_rows() {
   case "$kind" in
     github)
       _forge_has gh || { print -u2 -r -- "gh is not installed; PR lookup skipped"; return 1; }
-      _forge_run gh pr list -R "$host/$rpath" --state all --limit 200 \
+      limit=200
+      _forge_run gh pr list -R "$host/$rpath" --state all --limit $limit \
         --json headRefName,number,state,isDraft,url,headRefOid,updatedAt \
         --jq '.[] | [.headRefName, "#\(.number)", (if .isDraft and .state == "OPEN" then "draft" else (.state | ascii_downcase) end), .url, .headRefOid, .updatedAt] | @tsv'
       rc=$? out="$REPLY" ;;
     gitlab)
       _forge_has glab || { print -u2 -r -- "glab is not installed; MR lookup skipped"; return 1; }
-      _forge_run glab mr list -R "$url" --all --per-page 100 -F json \
+      limit=100
+      _forge_run glab mr list -R "$url" --all --per-page $limit -F json \
         --jq '.[] | [.source_branch, "!\(.iid)", (if .state == "opened" then (if .draft then "draft" else "open" end) elif .state == "locked" then "closed" else .state end), .web_url, .sha, .updated_at] | @tsv'
       rc=$? out="$REPLY" ;;
     *)
@@ -125,6 +131,11 @@ forge_pr_rows() {
     print -u2 -r -- "$kind lookup timed out after ${WT_FORGE_TIMEOUT}s; PR column left empty"; return 1
   elif (( rc != 0 )); then
     print -u2 -r -- "$kind lookup failed (exit $rc)${WT_FORGE_ERR:+: $WT_FORGE_ERR}"; return 1
+  fi
+  if [[ -n "$prefix" ]]; then
+    rows=(${(f)out})
+    if (( ${#rows} )); then print -rl -- "${rows[@]}" > "$prefix.all"; else : > "$prefix.all"; fi
+    (( ${#rows} >= limit )) && : > "$prefix.truncated"
   fi
   _forge_latest_per_branch <<< "$out"
 }

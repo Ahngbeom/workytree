@@ -51,6 +51,35 @@ test_github_rows_are_normalized_and_deduplicated() {
   unstub
 }
 
+test_prefix_keeps_every_row_and_marks_a_full_page() {
+  repo_with_origin https://github.com/o/r.git
+  gh() {
+    print -r -- $'fix/A\t#5\topen\thttps://x/5\tsha5\t2026-02-01T00:00:00Z'
+    print -r -- $'fix/A\t#7\tmerged\thttps://x/7\tsha7\t2026-03-01T00:00:00Z'
+  }
+  local out; out="$(forge_pr_rows "$HOME/r" "$HOME/p")"
+  assert_eq "$out" $'fix/A\t#7\tmerged\thttps://x/7\tsha7' latest-on-stdout
+  assert_eq "$(cut -f1-5 "$HOME/p.all")" $'fix/A\t#5\topen\thttps://x/5\tsha5\nfix/A\t#7\tmerged\thttps://x/7\tsha7' all-rows
+  assert_not_exists "$HOME/p.truncated"
+  gh() { local -i i; for (( i = 1; i <= 200; i++ )); do print -r -- "b$i"$'\t#'"$i"$'\tmerged\tu\ts\tt'; done; }
+  forge_pr_rows "$HOME/r" "$HOME/p" >/dev/null
+  assert_eq "$(wc -l < "$HOME/p.all" | tr -d ' ')" 200 all-200
+  assert_exists "$HOME/p.truncated"
+  unstub
+  git -C "$HOME/r" remote set-url origin git@gitlab.com:g/r.git
+  glab() { local -i i; for (( i = 1; i <= 99; i++ )); do print -r -- "b$i"$'\t!'"$i"$'\tmerged\tu\ts\tt'; done; }
+  forge_pr_rows "$HOME/r" "$HOME/p" >/dev/null
+  assert_not_exists "$HOME/p.truncated" glab-99
+  glab() { local -i i; for (( i = 1; i <= 100; i++ )); do print -r -- "b$i"$'\t!'"$i"$'\tmerged\tu\ts\tt'; done; }
+  forge_pr_rows "$HOME/r" "$HOME/p" >/dev/null
+  assert_exists "$HOME/p.truncated" glab-100
+  glab() { return 3; }
+  forge_pr_rows "$HOME/r" "$HOME/p" >/dev/null 2>&1
+  assert_not_exists "$HOME/p.all" failed-lookup-leaves-no-all
+  assert_not_exists "$HOME/p.truncated" failed-lookup-leaves-no-mark
+  unstub
+}
+
 test_gitlab_passes_origin_url_to_glab() {
   repo_with_origin git@gitlab.com:g/s/r.git
   glab() { print -r -- "$*" > "$HOME/glab.args"; print -r -- $'fix/A\t!4\topen\thttps://x/4\tsha4\t2026-01-01T00:00:00.000Z'; }

@@ -37,7 +37,7 @@ Usage: workytree <command> [args] [--project <name>] [--yes|-y] [--no-color]
                   [-r|--remote] [--to <dir>]                picks a worktree and asks about branches/destination when interactive
   workytree prune [repo]                                 prune stale refs + orphan dirs
   workytree list [repo]                                  git worktree list per repo
-  workytree status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain]
+  workytree status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain] [--branches]
                                                          worktree/branch overview; fzf list when available
   workytree repos                                        repos across all projects
   workytree path [repo [kind [ticket]]]                  print a path (script-friendly)
@@ -73,7 +73,7 @@ main() {
   case "$command" in
     help|-h|--help) usage ;;
     --version|version) print -r -- "workytree $WORKYTREE_VERSION" ;;
-    init|create|remove|prune|list|status|repos|path|cd|project|repo|config|__complete|__shell-init|__ai-configured|__status-rows|__status-preview|__status-action)
+    init|create|remove|prune|list|status|repos|path|cd|project|repo|config|__complete|__shell-init|__ai-configured|__status-rows|__status-preview|__status-branch-preview|__status-action)
       (( $+functions[cmd_$command] )) || die "command not implemented yet: $command"
       "cmd_$command" "$@" ;;
     *) usage >&2; usage_error "unknown command: $command" ;;

@@ -3,7 +3,7 @@
 # status_collect_repo emits one raw record per row: 26 TAB-separated fields, "-" for every
 # empty value. zsh's `read` treats TAB as IFS whitespace and collapses an empty field into
 # its neighbour, so readers split with "${(@ps:\t:)line}" and nothing is ever empty.
-#   1 type      worktree|main|branch|orphan|error   14 merged     0|1
+#   1 type      worktree|main|orphan|error   14 merged     0|1
 #   2 project                                       15 gone       0|1
 #   3 repo                                          16 dirty      clean|idea-only|real|unknown|-
 #   4 repo_path                                     17 ahead      vs upstream
@@ -107,10 +107,10 @@ status_flag() {
   local pr_state=$3 dirt=$4 ahead=$5 base_ahead=$7 age=$9 stale=${10}
   [[ "$pr_state" == merged ]] && merged=1
   if [[ "$dirt" == (real|unknown) || "$ahead" == <1-> ]] \
-     || { (( ! has_up && ! merged )) && [[ "$base_ahead" == <1-> ]]; }; then
+     || { (( (! has_up || gone) && ! merged )) && [[ "$base_ahead" == <1-> ]]; }; then
     REPLY=dirty; return
   fi
-  if (( ! locked )) && { (( merged || gone )) || [[ "$pr_state" == closed ]]; }; then
+  if (( ! locked && merged )); then
     REPLY=safe; return
   fi
   [[ "$age" == <-> ]] && (( age > stale )) && { REPLY=stale; return; }
@@ -235,10 +235,8 @@ status_collect_repo() {
     while IFS=$'\t' read -r b r s u h; do pr_ref[$b]=$r pr_state[$b]=$s pr_url[$b]=$u pr_sha[$b]=$h; done < "$pr_file"
   fi
 
-  local base base_local=- refs fmt
+  local base refs fmt
   base="$(status_base_ref "$repo_path")" || base=-
-  [[ "$base" == refs/remotes/origin/* ]] && base_local="${base#refs/remotes/origin/}"
-  [[ "$base" == refs/heads/* ]] && base_local="${base#refs/heads/}"
 
   # Keep this to two for-each-ref calls: a git call per branch multiplies with branch count.
   local -A b_ts b_up b_track b_ab b_tip b_merged
@@ -270,7 +268,6 @@ status_collect_repo() {
   _status_dirt_all "${wt_dirs[@]}"
 
   # Worktrees, in git's order; the first block is always the main checkout.
-  local -A checked_out
   local -i idx=0 locked prunable
   local wpath= wbranch= gitdir kind ticket rel dirt active created flag type age
   local -a tags
@@ -283,7 +280,6 @@ status_collect_repo() {
       "")
         [[ -n "$wpath" ]] || continue
         (( ++idx ))
-        [[ "$wbranch" != - ]] && checked_out[$wbranch]=1
         type=worktree kind=- ticket=- tags=()
         if (( idx == 1 )); then
           type=main
@@ -327,23 +323,6 @@ status_collect_repo() {
         wpath=
         ;;
     esac
-  done
-
-  # Local branches no worktree has checked out, minus the base branch itself.
-  local br
-  for br in ${(ok)b_ts}; do
-    (( ${+checked_out[$br]} )) && continue
-    [[ "$br" == "$base_local" ]] && continue
-    _status_branch_fields "$br"
-    age=-; [[ "${reply[1]}" != - ]] && age=$(( now - reply[1] ))
-    status_flag ${reply[2]} ${reply[3]} ${reply[12]} - ${reply[4]} ${reply[8]} ${reply[6]} 0 $age $stale_s
-    flag=$REPLY
-    tags=(); [[ "$flag" != - ]] && tags=($flag)
-    (( reply[2] )) && tags+=(merged)
-    (( reply[3] )) && tags+=(gone)
-    _status_emit branch "$project" "$repo" "$repo_path" - - - "$br" "$flag" "${${(j: :)tags}:--}" \
-      - - "${reply[1]}" "${reply[2]}" "${reply[3]}" - "${reply[4]}" "${reply[5]}" "${reply[6]}" \
-      "${reply[7]}" 0 0 "${reply[9]}" "${reply[10]}" "${reply[11]}" -
   done
 
   # Directories under <worktree_root>/<repo> that git does not know about. Read-only: no

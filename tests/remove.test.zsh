@@ -220,4 +220,36 @@ test_unmerged_branch_hint_is_runnable() {
   assert_eq "${out//re-run remove/}" "$out" "no hint that needs the removed worktree"
 }
 
+
+test_branch_delete_is_logged() {
+  fixture
+  local sha; sha="$(git -C "$HOME/src/app" rev-parse fix/T)"
+  wt remove app fix T -b >/dev/null 2>&1
+  local line; line="$(<"$HOME/.local/state/workytree/deleted.log")"
+  local -a f; f=("${(@ps:\t:)line}")
+  assert_eq "${#f}" 5 five-columns
+  [[ "${f[1]}" =~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[+-][0-9]{2}:[0-9]{2}$' ]]; assert_eq $? 0 iso-8601-with-colon-offset
+  assert_eq "${f[2]}" "$HOME/src/app"
+  assert_eq "${f[3]}" refs/heads/fix/T
+  assert_eq "${f[4]}" "$sha"
+  assert_eq "${f[5]}" "git -C $HOME/src/app branch fix/T $sha"
+  eval "${f[5]}"
+  assert_eq "$(git -C "$HOME/src/app" rev-parse fix/T)" "$sha" restored-from-log
+}
+
+test_kept_branch_is_not_logged() {
+  fixture
+  print y > "$WT/f"; git -C "$WT" add -A; git -C "$WT" commit -qm c
+  wt remove app fix T -b >/dev/null 2>&1
+  assert_not_exists "$HOME/.local/state/workytree/deleted.log"
+}
+
+test_unwritable_deletion_log_only_warns() {
+  fixture
+  mkdir -p "$HOME/.local/state"; print x > "$HOME/.local/state/workytree"
+  local out; out="$(wt remove app fix T -b 2>&1)"
+  assert_contains "$out" "could not write the deletion log"
+  assert_eq "$(git -C "$HOME/src/app" branch --list fix/T)" "" deleted-anyway
+}
+
 run_tests
