@@ -240,4 +240,14 @@ test_stale_days_config_is_used() {
   assert_eq "$(field fix/OLD 9)" - not-stale-under-huge-threshold
 }
 
+# Colour is forced only when the wrapper says its stdout is a terminal; `wt status > f` must
+# not write escapes into f.
+test_table_colour_follows_the_wrapper_mode() {
+  fixture
+  local esc=$'\e['
+  assert_contains "$(WORKYTREE_SHELL=terminal wt status --offline)" "$esc" "terminal"
+  local out; out="$(WORKYTREE_SHELL=redirected wt status --offline)"
+  assert_eq "${out#*$esc}" "$out" "redirected: no escapes"
+}
+
 run_tests

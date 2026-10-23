@@ -73,4 +73,17 @@ EOF
   assert_eq "$rc" 0
   assert_eq "$out" "ai=0 alias=1 config=error" "a broken config reads as defaults, and says so"
 }
+
+test_wrapper_protocol_never_reaches_git_hooks() {
+  make_repo "$HOME/src/app"
+  write_config <<'EOF'
+[project me]
+repo_root = ~/src
+worktree_root = ~/wts
+EOF
+  printf '#!/bin/sh\necho "hook sees [${WORKYTREE_SHELL-}${WT_SHELL-}${WORKYTREE_AI_SKIP-}${WT_AI_SKIP-}]" >&2\n' \
+    > "$HOME/src/app/.git/hooks/post-checkout"
+  chmod +x "$HOME/src/app/.git/hooks/post-checkout"
+  assert_contains "$(WORKYTREE_SHELL=terminal WORKYTREE_AI_SKIP=stdin wt create app fix H main -y 2>&1)" "hook sees []"
+}
 run_tests

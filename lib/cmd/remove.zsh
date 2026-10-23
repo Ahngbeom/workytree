@@ -292,6 +292,8 @@ cmd_remove() {
   fi
   (( interactive && WT_CAN_CD && ! to_given )) && { _rm_pick_destination "$target" "$repo_path"; dest="$REPLY"; }
   [[ -z "$dest" ]] && _rm_is_inside "$PWD" "$target" && dest="$repo_path"
+  local -i strands_cwd=0
+  (( ! WT_CAN_CD )) && _rm_is_inside "$PWD" "$target" && strands_cwd=1
 
   if (( interactive )); then
     local branch_plan="keep" remote_plan="keep"
@@ -344,6 +346,7 @@ cmd_remove() {
   _rm_print_results "${results[@]}"
   if [[ -n "$dest" ]]; then
     (( WT_CAN_CD )) && print -r -- "  → moving to     $dest"
+    (( strands_cwd )) && { warn "your shell's current directory was removed: $target"; hint "cd ${(q-)dest}"; }
     print -u $out_fd -r -- "$dest"
   fi
   return 0

@@ -127,6 +127,19 @@ test_action_refuses_non_worktree_rows() {
   assert_contains "$err" "branch -d lonely"
 }
 
+# ctrl-d runs remove in a child of status; the parent prints the main checkout last and the
+# wrapper moves the shell there.
+test_action_remove_from_inside_leaves_the_cwd_to_the_parent() {
+  fixture
+  local rec out err
+  rec="$(print -r -- "$RECORDS" | grep '^worktree')"
+  out="$(_status_pause() { :; }; WT_CONFIG_EXISTS=1; cd "$HOME/wts/app/fix/A" && cmd___status-action remove "$rec" </dev/null 2>"$HOME/err")"
+  err="$(<"$HOME/err")"
+  assert_contains "$err" "removed: $HOME/wts/app/fix/A"
+  assert_eq "${err#*directory was removed}" "$err" "no stranded-shell warning"
+  assert_eq "$out" "" "no destination line"
+}
+
 # fzf searches only the displayed field (--with-nth=27), so ctrl-s's "stale" query and typed
 # filters like "gone" need the tags on screen.
 test_display_field_carries_the_searchable_tags() {
