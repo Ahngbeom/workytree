@@ -163,12 +163,24 @@ fzf 0.38 이상이 있고 양쪽이 터미널이면 상세 창이 있는 fzf 목
 | `ctrl-r` | 모든 repo `git fetch` 후 새로고침 |
 | `ctrl-s` | `stale`/`safe` 행만 보기 (다시 누르면 전체) |
 | `ctrl-/` | 상세 창을 오른쪽 ↔ 아래로 전환 |
+| `ctrl-b` | 브랜치 모드로 전환 |
 
 - `ACTIVE`: 워크트리의 마지막 활동(index/HEAD), `COMMIT`: 브랜치의 마지막 커밋, 생성 시각: 상세 창
 - base 브랜치는 `origin/HEAD`, 없으면 `origin/main`이나 `origin/master`, 그것도 없으면 메인 checkout의 브랜치
 - 자기 커밋이 없는 브랜치는 "병합됨" 처리. 방금 만들고 커밋하지 않은 워크트리도 `✓`
 - 상세 창은 터미널이 100열 이상이면 오른쪽, 아니면 아래에 표시되고 창 크기 변경에 맞춰 이동
 - `✓`도 `git status`로 판단하므로 `remove`와 같은 사각지대가 있음: gitignore된 `.env` 같은 파일은 작업으로 치지 않음
+
+브랜치 모드(`ctrl-b`, 또는 `--branches`로 시작)는 워크트리가 없는 로컬 브랜치와 `origin` 브랜치를 이름별로 한 행에 보여 준다. 헤더에는 `origin` ref를 마지막으로 fetch한 시점(repo 중 가장 오래된 것)이 나온다.
+
+| 키 (브랜치 모드) | 동작 |
+|---|---|
+| `tab` / `shift-tab` | 행 표시·해제 |
+| `alt-d` | 표시한 행(없으면 현재 행) 삭제 후 표시를 지우고 새로고침 |
+| `ctrl-r` | 모든 repo `git fetch` 후 새로고침 |
+| `ctrl-s` | 등급이 `safe`인 행만 보기 (다시 누르면 전체) |
+| `ctrl-b` | 워크트리 목록으로 |
+| `enter` | 아무 동작 없음(목록 유지) |
 
 PR/MR 정보는 repo마다 한 번씩 `gh`(GitHub)나 `glab`(GitLab, `glab`이 로그인한 self-hosted 포함)을 호출해 가져온다. 둘 다 없거나 `--offline`이면 PR 열만 비고 나머지는 그대로 동작한다. squash·rebase 병합은 git이 추적할 조상 관계를 남기지 않으므로, 그런 브랜치는 PR/MR을 조회할 수 있을 때만 병합됨으로 표시된다.
 

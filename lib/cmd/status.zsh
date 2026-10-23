@@ -330,19 +330,21 @@ cmd_status() {
   [[ -t 2 ]] && ST_PROGRESS=1
   notes_file="$(mktemp 2>/dev/null)" || die "could not create a temp file"
   records="$(_status_records "$notes_file")" || { rc=$?; rm -f "$notes_file"; exit $rc; }
-  if (( ST_BRANCHES )); then
-    if (( ST_JSON )); then _branches_render_json "$records" "$notes_file"
-    else _branches_render_table "$records" "$notes_file"; fi
-  elif (( ST_JSON )); then _status_render_json "$records" "$notes_file"
+  if (( ST_JSON )); then
+    if (( ST_BRANCHES )); then _branches_render_json "$records" "$notes_file"
+    else _status_render_json "$records" "$notes_file"; fi
   elif (( interactive )); then _status_run_fzf "$records" "$notes_file"
+  elif (( ST_BRANCHES )); then _branches_render_table "$records" "$notes_file"
   else _status_render_table "$records" "$notes_file"; fi
   rm -f "$notes_file"
 }
 
-# __status-rows [status options]: the fzf input for a reload.
+# __status-rows [status options]: the fzf input for a reload. Under _status_run_fzf it also
+# creates $WT_STATUS_RELOADED, so the other mode's cached rows are collected again.
 cmd___status-rows() {
   require_config
   _status_parse_opts "$@"
+  [[ -n "${WT_STATUS_RELOADED:-}" ]] && : > "$WT_STATUS_RELOADED"
   ui_init force
   local notes_file records
   local -i rc
@@ -380,37 +382,73 @@ _status_reload_args() {
   return 0
 }
 
-_status_run_fzf() {
-  local records="$1" notes_file="$2" bin="$WORKYTREE_HOME/bin/workytree" line sel here_repo='' l
-  local -a f args
+# _status_here_repo <worktree records>: REPLY = the repo whose worktree this shell stands in,
+# where the wrapper should send the shell if ctrl-d removes that worktree out from under it.
+_status_here_repo() {
+  local line
+  local -a f
   local -i best=0
-  # The repo whose worktree this shell stands in: where the wrapper should send the shell if
-  # ctrl-d removes that worktree out from under it.
-  for line in "${(@f)records}"; do
+  REPLY=''
+  for line in "${(@f)1}"; do
     f=("${(@ps:\t:)line}")
     [[ "${f[1]}" == (main|worktree) && "${PWD:A}/" == "${f[5]:A}/"* ]] || continue
-    (( ${#f[5]} > best )) && { best=${#f[5]}; here_repo="${f[4]}"; }
+    (( ${#f[5]} > best )) && { best=${#f[5]}; REPLY="${f[4]}"; }
   done
-  _status_reload_args; args=("${reply[@]}")
-  local qbin="${(q)bin}"
-  local rows_cmd="$qbin __status-rows${args:+ ${(j: :)${(q)args[@]}}}"
+}
+
+# _status_run_fzf <records> <notes_file>: the fzf list, starting in the mode ST_BRANCHES
+# names; ctrl-b (an --expect key) ends one fzf and starts the other mode's.
+_status_run_fzf() {
+  local records="$1" bin="$WORKYTREE_HOME/bin/workytree" mode=worktrees out key sel header l here_repo=''
+  local -a f margs
+  local -A recs notes
+  local -i rc
+  local -i ST_FETCH=0 ST_BRANCHES=$ST_BRANCHES
+  (( ST_BRANCHES )) && mode=branches
+  recs[$mode]="$records" notes[$mode]="$2"
+  local tmp; tmp="$(mktemp -d 2>/dev/null)" || die "could not create a temp directory"
+  _status_reload_args
+  local qbin="${(q)bin}" qargs="${reply:+ ${(j: :)${(q)reply[@]}}}"
+  local rows_cmd="$qbin __status-rows$qargs"
   local fetch_cmd="$rows_cmd"; (( ST_OFFLINE )) || fetch_cmd+=" --fetch"
-  local header="enter: cd · ctrl-d: remove · ctrl-o: open PR · ctrl-r: refresh with fetch · ctrl-s: stale only · ctrl-/: layout"
-  _status_format "$records"
-  header+=$'\n'"$ST_HEADER"
-  if [[ -s "$notes_file" ]]; then
-    while IFS= read -r l; do header+=$'\n'"note: $l"; done < "$notes_file"
-  fi
-  # fzf runs bindings through $SHELL -c, and they are written for sh, not the user's shell.
-  sel="$(_status_fzf_input | SHELL=/bin/sh fzf --ansi --no-sort --layout=reverse \
-    --delimiter=$'\t' --with-nth=27 --header="$header" \
-    --preview="$qbin __status-preview {}" --preview-window='right,50%,<100(down,50%)' \
-    --bind="ctrl-d:execute($qbin __status-action remove {})+reload($rows_cmd)" \
-    --bind="ctrl-o:execute-silent($qbin __status-action open {})" \
-    --bind="ctrl-r:reload($fetch_cmd)" \
-    --bind='ctrl-/:change-preview-window(down,50%|right,50%)' \
-    --bind="ctrl-s:transform-query(if [ {q} = stale ]; then echo; else echo stale; fi)")"
-  if [[ -n "$sel" ]]; then
+  while :; do
+    [[ -e "$tmp/reloaded" ]] && { recs=() notes=(); rm -f "$tmp/reloaded"; }
+    ST_BRANCHES=0; [[ "$mode" == branches ]] && ST_BRANCHES=1
+    if (( ! ${+recs[$mode]} )); then
+      notes[$mode]="$tmp/notes.$mode"; : > "${notes[$mode]}"
+      recs[$mode]="$(_status_records "${notes[$mode]}")" || { rc=$?; rm -rf "$tmp"; return $rc; }
+    fi
+    if [[ "$mode" == branches ]]; then
+      _branches_format "${recs[$mode]}"
+      _branches_fzf_args "$qbin" "$qargs"; margs=("${reply[@]}") header="$REPLY"
+    else
+      [[ -z "$here_repo" ]] && { _status_here_repo "${recs[$mode]}"; here_repo="$REPLY"; }
+      _status_format "${recs[$mode]}"
+      header="enter: cd · ctrl-d: remove · ctrl-o: open PR · ctrl-r: refresh with fetch · ctrl-s: stale only · ctrl-/: layout · ctrl-b: branches"
+      margs=(--with-nth=27 --preview="$qbin __status-preview {}"
+        --bind="ctrl-d:execute($qbin __status-action remove {})+reload($rows_cmd)"
+        --bind="ctrl-o:execute-silent($qbin __status-action open {})"
+        --bind="ctrl-r:reload($fetch_cmd)"
+        --bind="ctrl-s:transform-query(if [ {q} = stale ]; then echo; else echo stale; fi)")
+    fi
+    header+=$'\n'"$ST_HEADER"
+    if [[ -s "${notes[$mode]}" ]]; then
+      while IFS= read -r l; do header+=$'\n'"note: $l"; done < "${notes[$mode]}"
+    fi
+    # fzf runs bindings through $SHELL -c, and they are written for sh, not the user's shell.
+    out="$(_status_fzf_input | WT_STATUS_RELOADED="$tmp/reloaded" SHELL=/bin/sh fzf --ansi --no-sort \
+      --layout=reverse --delimiter=$'\t' --header="$header" --expect=ctrl-b \
+      --preview-window='right,50%,<100(down,50%)' \
+      --bind='ctrl-/:change-preview-window(down,50%|right,50%)' "${margs[@]}")"
+    rc=$?
+    key="${out%%$'\n'*}"
+    # fzf exits 1 on ctrl-b over an empty list, so the key decides, not the exit status.
+    [[ "$key" == ctrl-b ]] || break
+    [[ "$mode" == branches ]] && mode=worktrees || mode=branches
+  done
+  rm -rf "$tmp"
+  sel=''; [[ "$out" == *$'\n'* ]] && sel="${out#*$'\n'}"
+  if (( rc == 0 )) && [[ "$mode" == worktrees && -z "$key" && -n "$sel" ]]; then
     f=("${(@ps:\t:)sel}")
     if [[ "${f[1]}" == (main|worktree) && -d "${f[5]}" ]]; then print -r -- "${f[5]}"; return 0; fi
   fi

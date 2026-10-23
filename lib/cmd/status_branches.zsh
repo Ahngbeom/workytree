@@ -1,5 +1,6 @@
-# `status --branches`: renderers for the 17-field branch records of lib/branches.zsh.
-# Callers pick these over the worktree renderers by ST_BRANCHES, never by record shape.
+# `status --branches`: renderers, fzf arguments and the details pane for the 17-field branch
+# records of lib/branches.zsh. Callers pick these over the worktree ones by ST_BRANCHES, never by
+# record shape.
 
 # _branches_display <record>: reply=(mark repo branch local remote why commit class).
 _branches_display() {
@@ -104,4 +105,86 @@ _branches_render_json() {
     print -rn -- "$sep{$obj}"; sep=','
   done
   print -r -- ']}'
+}
+
+# _branches_fetch_age <repo_path...>: REPLY = seconds since the fetch of the repo fetched
+# longest ago ("-" when none was), reply = (<repos> <repos never fetched>). A repo's fetch is
+# the newest non-empty FETCH_HEAD among its checkouts; a failed fetch leaves it empty.
+_branches_fetch_age() {
+  local rp line p fh
+  local -a t
+  local -i n=0 never=0 newest oldest=-1
+  for rp in "$@"; do
+    (( ++n )); newest=0
+    for line in "${(@f)$(git -C "$rp" worktree list --porcelain 2>/dev/null)}"; do
+      [[ "$line" == "worktree "* ]] || continue
+      p="${line#worktree }"
+      fh="$(git -C "$p" rev-parse --path-format=absolute --git-path FETCH_HEAD 2>/dev/null)" || fh="$p/.git/FETCH_HEAD"
+      [[ -s "$fh" ]] && zstat -A t +mtime -- "$fh" 2>/dev/null || continue
+      (( t[1] > newest )) && newest=${t[1]}
+    done
+    if (( ! newest )); then (( ++never ))
+    elif (( oldest < 0 || newest < oldest )); then oldest=$newest; fi
+  done
+  if (( oldest < 0 )); then REPLY=-; else REPLY=$(( EPOCHSECONDS - oldest )); fi
+  reply=($n $never)
+}
+
+# _branches_fzf_header: REPLY = the key line and the fetch-age line of the branch list.
+_branches_fzf_header() {
+  local keys="tab: mark · alt-d: delete marked · ctrl-r: refresh with fetch · ctrl-s: safe only · ctrl-b: worktrees"
+  local out line age ages
+  local -a rps
+  local -i fetched never
+  REPLY="$keys"
+  out="$(_status_targets 2>/dev/null)" || return 0
+  for line in "${(@f)out}"; do [[ -n "$line" ]] && rps+=("${${(@ps:\t:)line}[3]}"); done
+  (( ${#rps} )) || return 0
+  _branches_fetch_age "${rps[@]}"
+  age="$REPLY" never=${reply[2]} fetched=$(( reply[1] - reply[2] ))
+  if [[ "$age" == - ]]; then
+    ages="refs never fetched in $never repo${${never:#1}:+s}"
+  else
+    status_fmt_age $age
+    ages="refs fetched $REPLY ago (oldest) in $fetched repo${${fetched:#1}:+s}"
+    (( never )) && ages+=", $never repo${${never:#1}:+s} never fetched"
+  fi
+  REPLY="$keys"$'\n'"$ages — ctrl-r before deleting"
+}
+
+# _branches_fzf_args <quoted bin> <quoted reload args>: reply = the branch list's fzf
+# arguments, REPLY = its header lines above the column header.
+_branches_fzf_args() {
+  local qbin="$1" qargs="$2" rows fetch
+  rows="$qbin __status-rows$qargs --branches"
+  fetch="$rows"; (( ST_OFFLINE )) || fetch+=" --fetch"
+  _branches_fzf_header
+  reply=(--multi --with-nth=18 --bind=enter:ignore
+    --preview="$qbin __status-branch-preview {}"
+    --bind="alt-d:execute($qbin __status-action delete-branches {+f}$qargs)+deselect-all+reload($rows)"
+    --bind="ctrl-r:reload($fetch)"
+    --bind="ctrl-s:transform-query(if [ {q} = 'safe\$' ]; then echo; else echo 'safe\$'; fi)")
+}
+
+# __status-branch-preview <fzf line>: both sides of the highlighted branch row, from local
+# refs only.
+cmd___status-branch-preview() {
+  local -a f; f=("${(@ps:\t:)${1:-}}")
+  (( ${#f} >= 17 )) || return 0
+  local rp="${f[4]}" side label sha extra
+  if [[ "${f[1]}" == error ]]; then print -r -- "error · ${f[3]}"; print -r -- "${f[17]}"; return 0; fi
+  print -r -- "${f[5]} · ${f[3]} · ${f[10]}"
+  print -r -- "note      ${f[17]}"
+  [[ "${f[15]}" != - ]] && print -r -- "PR        ${f[15]} ${f[16]}"
+  for side in local:6 origin:7; do
+    label="${side%%:*}" sha="${f[${side#*:}]}" extra=''
+    print
+    if [[ "$sha" == - ]]; then print -r -- "${(r:10:)label}-"; continue; fi
+    [[ "$label" == local ]] && (( f[8] )) && extra='  (upstream gone)'
+    [[ "$label" == origin && "${f[9]}" != - ]] && extra="  (${f[9]})"
+    print -r -- "${(r:10:)label}$sha$extra"
+    print -r -- "  author  $(git -C "$rp" log -1 --format='%an <%ae>' "$sha" -- 2>/dev/null)"
+    git -C "$rp" log --oneline -5 "$sha" -- 2>/dev/null | sed 's/^/  /'
+  done
+  return 0
 }
