@@ -143,6 +143,25 @@ test_branch_without_worktree_moves_to_branch_mode() {
   assert_eq "$(field main 9)" -
 }
 
+# collect_with_prs: ROWS = status_collect_repo for app with ~/prs as the PR rows.
+collect_with_prs() {
+  ROWS="$(for f in "$WT_TEST_ROOT"/lib/*.zsh; do source "$f"; done
+    status_collect_repo me app "$HOME/src/app" 30 "$HOME/prs" 2>/dev/null)"
+}
+
+test_merged_pr_counts_only_at_the_pr_head_for_a_worktree() {
+  fixture; with_origin
+  local w="$HOME/wts/app/fix/P"
+  git -C "$HOME/src/app" worktree add -q -b fix/P "$w"
+  commit_in "$w" squashed; git -C "$w" push -q -u origin fix/P
+  print -r -- "fix/P"$'\t'"#5"$'\t'merged$'\t'"https://x/5"$'\t'"$(git -C "$w" rev-parse HEAD)" > "$HOME/prs"
+  collect_with_prs
+  assert_eq "$(field "$w" 9)" safe at-pr-head
+  commit_in "$w" after; git -C "$w" push -q origin fix/P
+  collect_with_prs
+  assert_eq "$(field "$w" 9)" - after-the-pr-head
+}
+
 test_orphan_dir_is_listed_and_left_alone() {
   fixture
   wt create app fix LIVE main >/dev/null 2>&1
