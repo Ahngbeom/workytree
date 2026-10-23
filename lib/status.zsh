@@ -107,10 +107,10 @@ status_flag() {
   local pr_state=$3 dirt=$4 ahead=$5 base_ahead=$7 age=$9 stale=${10}
   [[ "$pr_state" == merged ]] && merged=1
   if [[ "$dirt" == (real|unknown) || "$ahead" == <1-> ]] \
-     || { (( ! has_up && ! merged )) && [[ "$base_ahead" == <1-> ]]; }; then
+     || { (( (! has_up || gone) && ! merged )) && [[ "$base_ahead" == <1-> ]]; }; then
     REPLY=dirty; return
   fi
-  if (( ! locked )) && { (( merged || gone )) || [[ "$pr_state" == closed ]]; }; then
+  if (( ! locked && merged )); then
     REPLY=safe; return
   fi
   [[ "$age" == <-> ]] && (( age > stale )) && { REPLY=stale; return; }

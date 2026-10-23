@@ -97,7 +97,7 @@ test_untracked_file_is_dirty_but_idea_only_is_not() {
   assert_eq "$(field fix/IDEA 16)" idea-only
 }
 
-test_gone_upstream_is_safe() {
+test_gone_upstream_unmerged_is_dirty() {
   fixture; with_origin
   wt create app fix GONE main >/dev/null 2>&1
   commit_in "$HOME/wts/app/fix/GONE"
@@ -106,7 +106,7 @@ test_gone_upstream_is_safe() {
   git -C "$HOME/src/app" fetch -q --prune origin
   load_rows
   assert_eq "$(field fix/GONE 15)" 1 gone
-  assert_eq "$(field fix/GONE 9)" safe
+  assert_eq "$(field fix/GONE 9)" dirty
 }
 
 test_ahead_of_upstream_is_dirty() {

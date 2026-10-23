@@ -23,9 +23,11 @@ test_fmt_age_boundaries() {
 test_flag_table() {
   status_flag 1 0 - clean 0 1 0 0 10 100; assert_eq "$REPLY" safe      merged-clean
   status_flag 1 0 - idea-only 0 1 0 0 10 100; assert_eq "$REPLY" safe  idea-only-is-not-work
-  status_flag 0 1 - clean - 1 3 0 10 100; assert_eq "$REPLY" safe      gone
+  status_flag 0 1 - clean - 1 3 0 10 100; assert_eq "$REPLY" dirty     gone-unmerged-is-the-only-copy
+  status_flag 0 1 - clean - 1 0 0 10 100; assert_eq "$REPLY" -         gone-without-own-commits
   status_flag 0 0 merged clean 0 1 3 0 10 100; assert_eq "$REPLY" safe squash-merged-pr
-  status_flag 0 0 closed clean 0 1 3 0 10 100; assert_eq "$REPLY" safe closed-pr
+  status_flag 0 0 closed clean 0 1 3 0 10 100; assert_eq "$REPLY" -    closed-pr-is-not-safe
+  status_flag 0 0 closed clean 0 1 3 0 500 100; assert_eq "$REPLY" stale closed-pr-old
   status_flag 1 0 - real 0 1 0 0 10 100; assert_eq "$REPLY" dirty      uncommitted
   status_flag 1 0 - unknown 0 1 0 0 10 100; assert_eq "$REPLY" dirty   unknown-is-never-safe
   status_flag 1 0 - clean 2 1 0 0 10 100; assert_eq "$REPLY" dirty     unpushed
