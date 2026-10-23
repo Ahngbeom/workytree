@@ -79,21 +79,20 @@ test_line_mode_is_unchanged_without_keys() {
   assert_eq "$(choose 0 a b c)" "b"
 }
 
+# pty_script <file>: `zsh -f <file>` under pty_start. A zpty starts 0 columns wide, and ZLE draws
+# no prompt at width 0. PATH=/usr/bin:/bin keeps fzf out, so the built-in menus run.
+pty_script() { pty_start "stty cols 80 rows 24; PATH=/usr/bin:/bin exec ${(q)commands[zsh]} -f ${(q)1}"; }
+
 # tty_input <keys> [default] [setup]: prompt_input on a real pseudo-terminal, fed <keys>; prints REPLY.
 tty_input() {
-  zmodload zsh/zpty
-  local out="$TMP_ROOT/tty.out" script="$TMP_ROOT/tty.zsh" screen s=''
-  local -i i
+  local out="$TMP_ROOT/tty.out"
   rm -f "$out"
-  # A zpty starts 0 columns wide, and ZLE draws no prompt at width 0.
-  print -r -- "stty cols 80; ${3:-}; source ${(q)WT_TEST_ROOT}/lib/ui.zsh; source ${(q)WT_TEST_ROOT}/lib/prompt.zsh
-    prompt_input ticket ${(q)2:-}; print -r -- \"\$REPLY\" > ${(q)out}" > "$script"
-  zpty wt zsh -f "${(q)script}"
-  for (( i = 0; i < 50; i++ )); do zpty -r -t wt screen && s+="$screen"; [[ "$s" == *ticket* ]] && break; sleep 0.1; done
-  zpty -w -n wt "$(printf '%b' "$1")"
-  # Without draining the pty here, the child never writes $out.
-  for (( i = 0; i < 50; i++ )); do [[ -s $out ]] && break; zpty -r -t wt screen; sleep 0.1; done
-  zpty -d wt
+  print -r -- "${3:-}; source ${(q)WT_TEST_ROOT}/lib/ui.zsh; source ${(q)WT_TEST_ROOT}/lib/prompt.zsh
+    prompt_input ticket ${(q)2:-}; print -r -- \"\$REPLY\" > ${(q)out}" > "$TMP_ROOT/tty.zsh"
+  pty_script "$TMP_ROOT/tty.zsh"
+  pty_wait ticket 50
+  pty_send "$(printf '%b' "$1")"
+  pty_finish 50
   [[ -s $out ]] && print -r -- "$(<$out)"
 }
 
@@ -117,6 +116,50 @@ test_input_prompt_text_is_never_expanded() {
   local def='$(touch pwned)%~'
   assert_eq "$(tty_input "\r" "$def" "setopt prompt_subst")" "$def"
   assert_not_exists "$TMP_ROOT/pwned"
+}
+
+test_choose_ignores_modified_arrows_and_function_keys() {
+  keys '\e[1;2B\e[1;5B\n'; assert_eq "$(choose 0 a b c)" "c" "shift/ctrl+down move like down"
+  keys '\e[15~\n';         assert_eq "$(choose 0 a b c d e)" "a" "F5 neither selects nor moves"
+  keys '\eb\n';            assert_eq "$(choose 0 a b c)" "a" "Option+Left (Esc b) neither cancels nor moves"
+  keys '\eOB\n';           assert_eq "$(choose 0 a b c)" "b" "SS3 down"
+}
+
+test_confirm_ignores_function_keys() {
+  keys '\e[15~\e[1;2C\n'; assert_eq "$(confirm_rc n)" 0 "F5 does not answer; shift+right toggles"
+}
+
+# tty_widgets <choose keys> [confirm keys]: prompt_choose a b c, then prompt_confirm (default
+# Yes), on a real terminal; "|" in <choose keys> pauses 0.15 s. Prints "<choice> <confirm rc>
+# <modes restored 0|1>", or "- <rc>" when the menu exited. Only icanon/echo/isig are compared:
+# macOS adds PENDIN to `stty -g` whenever canonical mode comes back.
+tty_widgets() {
+  local out="$TMP_ROOT/w.out" part
+  rm -f "$out"
+  print -r -- "source ${(q)WT_TEST_ROOT}/lib/ui.zsh; source ${(q)WT_TEST_ROOT}/lib/prompt.zsh
+    modes() { stty -a | tr ' ' '\\n' | grep -E '^-?(icanon|echo|isig)\$' | sort; }
+    before=\$(modes)
+    choice=\$( prompt_choose pick 0 a b c; print -r -- \$REPLY ) || { print -r -- \"- \$?\" > ${(q)out}; exit; }
+    ( prompt_confirm proceed y ); rc=\$?
+    [[ \$before == \$(modes) ]]; print -r -- \"\$choice \$rc \$?\" > ${(q)out}" > "$TMP_ROOT/w.zsh"
+  pty_script "$TMP_ROOT/w.zsh"
+  pty_wait pick 50
+  for part in "${(@s:|:)1}"; do pty_send "$(printf '%b' "$part")"; sleep 0.15; done
+  pty_wait proceed 50 && sleep 0.3 && pty_send "${2:-n}"
+  pty_finish 50
+  [[ -s $out ]] && print -r -- "$(<$out)"
+}
+
+test_typeahead_does_not_answer_the_next_prompt() {
+  assert_eq "$(tty_widgets '2\r' n)" "b 1 0" "the Enter typed with 2 is dropped; the confirm waits for n"
+}
+
+test_split_escape_sequence_is_still_an_arrow() {
+  assert_eq "$(tty_widgets '\e|[B\r' y)" "b 0 0" "Esc, a pause, then [B is Down"
+}
+
+test_lone_escape_still_cancels_on_a_terminal() {
+  assert_eq "$(tty_widgets '\e')" "- 130"
 }
 
 run_tests

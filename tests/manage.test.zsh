@@ -248,4 +248,23 @@ test_repo_add_notes_symlink_derived_name() {
   assert_eq "${out//derived from the resolved target/}" "$out" "explicit --name must not trigger the symlink note"
 }
 
+test_repo_add_registers_under_the_given_project() {
+  make_repo "$HOME/elsewhere/lib1"; make_repo "$HOME/elsewhere/lib2"
+  wt project add me ~/src ~/wts >/dev/null; wt project add second ~/src2 ~/wts2 >/dev/null
+  assert_exit 0 wt repo add ~/elsewhere/lib1 --project second
+  assert_eq "$(wt config get repo.lib1.project)" second space-form
+  assert_exit 0 wt repo add ~/elsewhere/lib2 --project=second
+  assert_eq "$(wt config get repo.lib2.project)" second equals-form
+  local out; out="$(wt repo add ~/elsewhere/lib1 --name lib3 --project ghost 2>&1)"
+  assert_eq "$?" 1
+  assert_contains "$out" "unknown project: ghost"
+}
+
+test_repo_add_name_without_a_value_is_a_usage_error() {
+  make_repo "$HOME/elsewhere/lib1"; wt project add me ~/src ~/wts >/dev/null
+  local out; out="$(wt repo add ~/elsewhere/lib1 --name 2>&1)"
+  assert_eq "$?" 2
+  assert_eq "$out" "workytree: --name requires a value"
+}
+
 run_tests

@@ -108,6 +108,8 @@ _prompt_raw_on() {
   WT_PROMPT_STTY="$(stty -g <&$WT_PROMPT_FD)"
   # -isig: Ctrl-C arrives as a key, so the cancel path restores the terminal before exiting.
   stty -icanon -echo -isig <&$WT_PROMPT_FD
+  local junk
+  while read -u $WT_PROMPT_FD -t 0 -k 1 -r junk; do :; done
 }
 _prompt_raw_off() {
   [[ -n "$WT_PROMPT_STTY" ]] || return 0
@@ -115,22 +117,27 @@ _prompt_raw_off() {
 }
 _prompt_cancel() { _prompt_raw_off; _prompt_say $'\n'; exit 130; }
 
-# _prompt_key -> KEY: up|down|left|right|enter|tab|cancel, or the literal character typed.
+# _prompt_key -> KEY: up|down|left|right|enter|tab|cancel, empty for a key with no meaning
+# here, or the literal character typed.
 _prompt_key() {
-  local c d e
+  local c d
+  local -F wait=$(( ${KEYTIMEOUT:-40} / 100.0 ))
   read -u $WT_PROMPT_FD -k 1 -r c || _prompt_cancel
   case "$c" in
     $'\n'|$'\r') KEY=enter ;;
     $'\t')       KEY=tab ;;
     $'\x03'|q)   KEY=cancel ;;
     $'\e')
-      # A lone Esc has nothing following it; an arrow key is Esc + [ (or O) + letter.
-      if read -u $WT_PROMPT_FD -t 0.05 -k 1 -r d && [[ "$d" == [\[O] ]] \
-          && read -u $WT_PROMPT_FD -t 0.05 -k 1 -r e; then
-        case "$e" in A) KEY=up ;; B) KEY=down ;; C) KEY=right ;; D) KEY=left ;; *) KEY='' ;; esac
-      else
-        KEY=cancel
-      fi ;;
+      # Nothing within KEYTIMEOUT is a lone Esc. A sequence is read to its end so none of its
+      # bytes becomes a later key: CSI takes bytes 0x20-0x3F up to one final byte, SS3 one byte.
+      read -u $WT_PROMPT_FD -t $wait -k 1 -r d || { KEY=cancel; return; }
+      KEY=''
+      case "$d" in
+        \[) while read -u $WT_PROMPT_FD -t $wait -k 1 -r d && (( #d >= 0x20 && #d <= 0x3F )); do :; done ;;
+        O)  read -u $WT_PROMPT_FD -t $wait -k 1 -r d ;;
+        *)  return ;;
+      esac
+      case "$d" in A) KEY=up ;; B) KEY=down ;; C) KEY=right ;; D) KEY=left ;; esac ;;
     *) KEY="$c" ;;
   esac
 }

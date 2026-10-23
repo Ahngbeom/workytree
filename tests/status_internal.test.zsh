@@ -152,4 +152,54 @@ test_pr_state_counts_only_at_the_pr_head() {
   assert_eq "${f[24]}" merged pr-state-still-shown
 }
 
+# verdict_repo: app with a bare origin and one branch per verdict case. Local main stays
+# behind origin/main, as after merging on the forge without pulling.
+verdict_repo() {
+  local a="$HOME/src/app" b
+  make_repo "$a"
+  typeset -ga WT_PROJECTS=(me)
+  typeset -gA WT_PCFG=(me.repo_root "$HOME/src" me.worktree_root "$HOME/wts") WT_CFG=() WT_RCFG=()
+  git init -q --bare -b main "$HOME/remote.git"
+  git -C "$a" remote add origin "$HOME/remote.git"
+  git -C "$a" push -q -u origin main
+  for b in anc gone push prtip prold local; do
+    git -C "$a" checkout -q -b "fix/$b" main
+    git -C "$a" commit -q --allow-empty -m "$b"
+    [[ "$b" == local ]] || git -C "$a" push -q -u origin "fix/$b" 2>/dev/null
+  done
+  printf 'fix/%s\t#%s\tmerged\thttps://x/%s\t%s\n' \
+    prtip 1 1 "$(git -C "$a" rev-parse fix/prtip)" prold 2 2 "$(git -C "$a" rev-parse fix/prold)" > "$HOME/prs"
+  git -C "$a" checkout -q fix/prold
+  git -C "$a" commit -q --allow-empty -m after-the-pr
+  git -C "$a" checkout -q main
+  git clone -q "$HOME/remote.git" "$HOME/other"
+  git -C "$HOME/other" merge -q --no-ff -m "Merge PRs" origin/fix/anc origin/fix/gone >/dev/null
+  git -C "$HOME/other" push -q origin main
+  git -C "$HOME/other" push -q origin --delete fix/gone
+  git -C "$a" fetch -q --prune origin
+}
+
+test_remove_and_status_share_the_merged_verdict() {
+  verdict_repo
+  forge_pr_rows() { cat "$HOME/prs"; }
+  local rows b; local -a f; local -A tagged
+  rows="$(status_collect_repo me app "$HOME/src/app" 30 "$HOME/prs" | grep $'^branch\t')"
+  for b in "${(@f)rows}"; do f=("${(@ps:\t:)b}"); tagged[${f[8]}]=${f[14]}; done
+  for b in anc:merged:1 gone:merged:1 prtip:merged:1 push:pushed:0 prold:unmerged:0 local:unmerged:0; do
+    branch_verdict "$HOME/src/app" "fix/${b%%:*}"
+    assert_eq "$REPLY" "${${b#*:}%:*}" "verdict fix/${b%%:*}"
+    assert_eq "${tagged[fix/${b%%:*}]}" "${b##*:}" "status merged fix/${b%%:*}"
+  done
+  assert_eq "$WT_VERDICT_BASE" origin/main base-name
+  branch_verdict "$HOME/src/app" fix/prtip
+  assert_eq "$WT_VERDICT_PR" "#1" pr-named
+  branch_verdict "$HOME/src/app" fix/gone
+  assert_eq "$WT_VERDICT_PR" "" ancestry-needs-no-pr
+  forge_pr_rows() { return 1; }
+  branch_verdict "$HOME/src/app" fix/prtip
+  assert_eq "$REPLY" pushed without-forge-data-ancestry-only
+  # unfunction would delete the real forge_pr_rows for every later test in this file.
+  source "$WT_TEST_ROOT/lib/forge.zsh"
+}
+
 run_tests
