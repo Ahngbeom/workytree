@@ -139,11 +139,11 @@ cmd_create() {
   for arg in "$@"; do
     if (( saw_dashdash )); then pos+=("$arg"); continue; fi
     case "$arg" in
-      --)   saw_dashdash=1 ;;
-      --ai) want_ai=1 ;;
+      --)      saw_dashdash=1 ;;
+      --ai)    want_ai=1 ;;
       --no-ai) no_ai=1 ;;
-      -*)   usage_error "unknown flag: $arg (put a value that starts with '-' after --)" ;;
-      *)    pos+=("$arg") ;;
+      -*)      usage_error "unknown flag: $arg (put a value that starts with '-' after --)" ;;
+      *)       pos+=("$arg") ;;
     esac
   done
   require_config
