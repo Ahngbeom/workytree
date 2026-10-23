@@ -250,4 +250,13 @@ test_table_colour_follows_the_wrapper_mode() {
   assert_eq "${out#*$esc}" "$out" "redirected: no escapes"
 }
 
+test_linked_worktree_found_by_scan_is_collected_once() {
+  fixture
+  git -C "$HOME/src/app" worktree add -q "$HOME/src/agent-x" -b agent-x
+  load_rows
+  local -a mains; mains=(${(f)"$(print -r -- "$ROWS" | awk -F'\t' '$1=="main"')"})
+  assert_eq "${#mains}" 1 one-main-row
+  assert_eq "${${(@ps:\t:)mains[1]}[3]}" app main-checkout-wins
+}
+
 run_tests

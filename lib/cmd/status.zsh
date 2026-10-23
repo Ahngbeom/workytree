@@ -48,8 +48,37 @@ _status_targets() {
     local r; r="$(resolve_repo "$ST_REPO")" || exit $?
     print -r -- "$ST_REPO"$'\t'"${r%%$'\t'*}"$'\t'"${r#*$'\t'}"
   else
-    all_repos "$WT_PROJECT_OPT"
+    local all; all="$(all_repos "$WT_PROJECT_OPT")" || return $?
+    _status_unique_repos "$all"
   fi
+}
+
+# _status_unique_repos <target lines>: one line per git common dir. A linked worktree scanned
+# as a repo shares the main checkout's common dir; the line whose .git is a directory wins,
+# else the first line. Winners keep their input order.
+_status_unique_repos() {
+  local -a lines keys
+  lines=("${(@f)1}")
+  local -A owner is_main
+  local -i i=0 j
+  local line rp key dir_git
+  for line in "${lines[@]}"; do
+    (( ++i ))
+    [[ -n "$line" ]] || continue
+    rp="${${(@ps:\t:)line}[3]}"
+    key="$(git -C "$rp" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || key=''
+    [[ -n "$key" ]] || key="$rp"
+    keys[i]="$key"
+    dir_git=0; [[ -d "$rp/.git" ]] && dir_git=1
+    if [[ -z "${owner[$key]:-}" ]]; then
+      owner[$key]=$i is_main[$key]=$dir_git
+    elif (( dir_git && ! is_main[$key] )); then
+      owner[$key]=$i is_main[$key]=1
+    fi
+  done
+  for (( j = 1; j <= ${#lines}; j++ )); do
+    [[ -n "${lines[$j]}" && "${owner[${keys[$j]}]:-}" == $j ]] && print -r -- "${lines[$j]}"
+  done
 }
 
 # _status_collect_one <name> <project> <repo_path> <stale_days> <out_prefix>: one repo's
