@@ -182,7 +182,7 @@ cmd_remove() {
   (( ${#pos} <= 3 )) || usage_error "$usage"
   local repo="${pos[1]:-}" kind="${pos[2]:-}" ticket="${pos[3]:-}"
   if (( ${#pos} < 3 )); then
-    prompt_available || usage_error "$usage (repo, kind and ticket are required without a terminal)"
+    prompt_available || usage_error "$usage (repo, kind and ticket are required; not asking: $(prompt_blocker))"
     _rm_pick_worktree "$repo" "$kind"   # sets repo kind ticket, and WT_PROJECT_OPT
   fi
 

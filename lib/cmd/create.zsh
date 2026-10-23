@@ -130,16 +130,16 @@ cmd_create() {
   fi
 
   if [[ -z "$repo_path" ]]; then
-    prompt_available || usage_error "repo is required: workytree create <repo> <kind> <ticket> [base]"
+    prompt_available || usage_error "repo is required: workytree create <repo> <kind> <ticket> [base] (not asking: $(prompt_blocker))"
     create_pick_repo   # sets project repo repo_path (Task 5)
   fi
 
   if [[ -z "$kind" ]]; then
-    prompt_available || usage_error "kind is required: workytree create [repo] <kind> <ticket> [base]"
+    prompt_available || usage_error "kind is required: workytree create [repo] <kind> <ticket> [base] (not asking: $(prompt_blocker))"
     prompt_choose "kind" 1 ${(f)"$(config_kinds)"}; kind="$REPLY"
   fi
   if [[ -z "$ticket" ]]; then
-    prompt_available || usage_error "ticket is required: workytree create [repo] <kind> <ticket> [base]"
+    prompt_available || usage_error "ticket is required: workytree create [repo] <kind> <ticket> [base] (not asking: $(prompt_blocker))"
     prompt_input "ticket" ""; ticket="$REPLY"
   fi
 

@@ -55,7 +55,12 @@ cmd_config() {
     # redirection's own raw diagnostic when the directory is read-only. Neither step's
     # failure is a success claim: whatever the editor then reports about a file it cannot
     # open is between it and the user.
-    edit) local f; f="$(config_file_path)"; mkdir -p "${f:h}" 2>/dev/null
+    edit) if ! prompt_available || [[ ! -t 1 ]]; then
+            error "config edit needs a terminal for the editor (not opening one: $(prompt_blocker))"
+            hint "use: workytree config path | get <key> | set <key> <value>"
+            exit 2
+          fi
+          local f; f="$(config_file_path)"; mkdir -p "${f:h}" 2>/dev/null
           [[ -e "$f" ]] || { : > "$f" } 2>/dev/null
           exec "${VISUAL:-${EDITOR:-vi}}" "$f" ;;
     *)    usage_error "usage: workytree config path|get <key>|set <key> <value>|edit" ;;

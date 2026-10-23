@@ -119,4 +119,13 @@ test_input_prompt_text_is_never_expanded() {
   assert_not_exists "$TMP_ROOT/pwned"
 }
 
+test_yes_beats_the_prompt_hook_and_names_itself() {
+  local -i WT_YES=1
+  WORKYTREE_PROMPT_INPUT=/dev/null prompt_available
+  assert_eq "$?" 1 "-y never asks, even with the test hook set"
+  assert_eq "$(prompt_blocker)" "--yes"
+  WT_YES=0
+  assert_eq "$(prompt_blocker)" "no terminal"
+}
+
 run_tests

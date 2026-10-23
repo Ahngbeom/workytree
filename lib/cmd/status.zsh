@@ -283,10 +283,10 @@ cmd_status() {
   _status_parse_opts "$@"
   local notes_file records
   local -i interactive=0 rc
-  if (( ! ST_JSON && ! ST_PLAIN )) && [[ -t 0 ]] && { [[ -t 1 || "$WT_SHELL" == terminal ]]; }; then
+  if (( ! ST_JSON && ! ST_PLAIN )) && prompt_screen; then
     _status_fzf_ok && interactive=1
   fi
-  # The wrapper captures stdout to find a cd target, but it still lands on the terminal.
+  # In terminal mode the wrapper captures stdout to find a cd target, but it still lands on the terminal.
   if (( interactive )) || [[ "$WT_SHELL" == terminal ]]; then ui_init force; fi
   [[ -t 2 ]] && ST_PROGRESS=1
   notes_file="$(mktemp 2>/dev/null)" || die "could not create a temp file"

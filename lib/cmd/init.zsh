@@ -55,7 +55,7 @@ cmd_init() {
     name="$1" rr="$2" wr="$3"
     cmd_project add "$name" "$rr" "$wr"
   elif (( $# == 0 )); then
-    prompt_available || usage_error "usage (non-interactive): workytree init <name> <repo_root> <worktree_root>"
+    prompt_available || usage_error "usage: workytree init <name> <repo_root> <worktree_root> (not asking: $(prompt_blocker))"
     _prompt_say "workytree setup -- a project pairs a repo_root (where your clones live) with a worktree_root."$'\n'
     # Defaults must themselves satisfy cmd_project add's invariants (R32/R30) -- $HOME/src
     # and $HOME/worktrees are absolute and are proper (not equal-to-or-ancestor-of) $HOME, so
