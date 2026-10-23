@@ -526,4 +526,54 @@ EOF2
   assert_contains "$(git -C "$HOME/src/app" branch --list fix/T)" fix/T
 }
 
+remove_as_branch_moves() {
+  ( setopt extendedglob
+    typeset -g WT_PROJECT_OPT='' WT_AI_RUNFILE=''; typeset -gi WT_YES=1 WT_CAN_CD=0
+    local f; for f in "$WT_TEST_ROOT"/lib/*.zsh "$WT_TEST_ROOT"/lib/cmd/*.zsh; do source "$f"; done
+    forge_pr_rows() { return 0; }
+    functions -c branch_verdict judge_branch
+    branch_verdict() {
+      judge_branch "$@"
+      local -i rc=$?
+      local verdict="$REPLY" moved
+      moved="$(git -C "$1" commit-tree -p "refs/heads/$2" -m moved "refs/heads/$2^{tree}")"
+      git -C "$1" update-ref "refs/heads/$2" "$moved" && print -r -- "$moved" > "$HOME/moved-to"
+      REPLY="$verdict"; return $rc
+    }
+    ui_init; config_load; cmd_remove "$@" ) < /dev/null
+}
+
+test_merged_branch_that_moves_after_the_verdict_is_kept() {
+  fixture
+  local out; out="$(remove_as_branch_moves app fix T -b 2>&1)"
+  assert_eq "$?" 0
+  local moved; moved="$(<$HOME/moved-to)"
+  assert_not_exists "$WT"
+  assert_eq "$(git -C "$HOME/src/app" rev-parse -q --verify refs/heads/fix/T)" "$moved" "branch kept at the new tip"
+  assert_contains "$out" "moved since it was checked"
+  assert_contains "$(git -C "$HOME/src/app" rev-list --all)" "$moved" "new commit still reachable"
+}
+
+test_confirmed_force_delete_spares_a_branch_that_moved_after_the_verdict() {
+  fixture; local sha; sha="$(commit_in_wt C)"
+  answers "y" "y" "n" ""        # delete local, force it, keep remote, proceed
+  local out; out="$(remove_as_branch_moves app fix T 2>&1)"
+  assert_eq "$?" 0
+  local moved; moved="$(<$HOME/moved-to)"
+  assert_contains "$out" "unmerged"
+  assert_not_exists "$WT"
+  assert_eq "$(git -C "$HOME/src/app" rev-parse -q --verify refs/heads/fix/T)" "$moved" "branch kept at the new tip"
+  assert_contains "$out" "moved since it was checked"
+  assert_contains "$(git -C "$HOME/src/app" rev-list --all)" "$sha" "the commits the user was shown survive too"
+}
+
+test_branch_force_flag_deletes_a_branch_that_moved_after_the_verdict() {
+  fixture; commit_in_wt C >/dev/null
+  answers "n" ""                # keep remote, proceed
+  local out; out="$(remove_as_branch_moves app fix T -B 2>&1)"
+  assert_eq "$?" 0
+  assert_eq "$(local_branch fix/T)" "" "-B deletes whatever is there"
+  assert_eq "${out//moved since it was checked/}" "$out" "no moved warning under -B"
+}
+
 run_tests

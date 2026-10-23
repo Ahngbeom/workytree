@@ -1,9 +1,16 @@
-# remove_branch <repo_path> <branch> <force>: best-effort branch delete after the worktree
-# using it is already gone. REPLY = the short sha the branch pointed at.
+# remove_branch <repo_path> <branch> <force> [expect_sha]: best-effort branch delete after the
+# worktree using it is already gone. REPLY = the short sha the branch pointed at. A forced delete
+# with expect_sha keeps a branch that has moved off it.
 remove_branch() {
-  local repo_path="$1" branch="$2" force="$3" flag='-d' out
+  local repo_path="$1" branch="$2" force="$3" expect_sha="${4:-}" flag='-d' out
   (( force )) && flag='-D'
   REPLY="$(git -C "$repo_path" rev-parse --short "refs/heads/$branch" 2>/dev/null)"
+  if (( force )) && [[ -n "$expect_sha" ]] \
+     && [[ "$(git -C "$repo_path" rev-parse -q --verify "refs/heads/$branch" 2>/dev/null)" != "$expect_sha" ]]; then
+    warn "kept branch $branch: it moved since it was checked (now $REPLY)"
+    hint "delete it anyway, and lose those commits: git -C ${(q)repo_path} branch -D ${(q)branch}"
+    return 1
+  fi
   if out="$(git -C "$repo_path" branch "$flag" "$branch" 2>&1)"; then
     success "deleted branch $branch (was $REPLY)"
     hint "restore it with: git -C ${(q)repo_path} branch ${(q)branch} ${(q)REPLY}"
@@ -302,8 +309,9 @@ cmd_remove() {
     hint "if it exists upstream, refresh tracking refs first: git -C ${(q)repo_path} fetch --all"
     delete_remote=0
   fi
-  local verdict="" base_name="" label="" pr_head=""
+  local verdict="" base_name="" label="" pr_head="" branch_tip=""
   if [[ -n "$branch" ]] && (( interactive || (delete_branch && ! force_branch) )); then
+    branch_tip="$(git -C "$repo_path" rev-parse -q --verify "refs/heads/$branch")"
     branch_verdict "$repo_path" "$branch"; verdict="$REPLY" pr_head="$WT_VERDICT_PR_SHA"
     base_name="${WT_VERDICT_BASE:-the base branch}"
     case "$verdict" in
@@ -398,7 +406,8 @@ cmd_remove() {
 
   if (( delete_branch )); then
     ui_progress $(( ++step )) $total "deleting local branch $branch"
-    if remove_branch "$repo_path" "$branch" $(( force_branch || verified )); then results+=("ok"$'\t'"local branch   deleted       $branch (was $REPLY)")
+    local expect_tip="$branch_tip"; (( branch_force_given )) && expect_tip=""
+    if remove_branch "$repo_path" "$branch" $(( force_branch || verified )) "$expect_tip"; then results+=("ok"$'\t'"local branch   deleted       $branch (was $REPLY)")
     else results+=("fail"$'\t'"local branch   not deleted   $branch"); fi
   elif [[ -n "$branch_row" ]]; then
     results+=("$branch_row")
