@@ -37,7 +37,7 @@ Usage: workytree <command> [args] [--project <name>] [--yes|-y] [--no-color]
                   [-r|--remote] [--to <dir>]                picks a worktree and asks about branches/destination when interactive
   workytree prune [repo]                                 prune stale refs + orphan dirs
   workytree list [repo]                                  git worktree list per repo
-  workytree status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain]
+  workytree status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain] [--branches]
                                                          worktree/branch overview; fzf list when available
   workytree repos                                        repos across all projects
   workytree path [repo [kind [ticket]]]                  print a path (script-friendly)

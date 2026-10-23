@@ -112,7 +112,7 @@ wt create --ai fix PROJ-1          # 생성하고 이동한 뒤 AI 세션 실행
 wt create --no-ai fix PROJ-1       # 이번에는 AI 세션을 열지 않음
 wt cd server fix PROJ-1            # 없는 워크트리면 오류(종료 코드 1)
 wt list [repo] · wt repos · wt path [repo [kind [ticket]]]
-wt status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain]
+wt status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain] [--branches]
 wt remove                          # 대화형: 워크트리 선택 → 브랜치 → 이동할 곳 → 확인
 wt remove server fix PROJ-1        # 대화형: 브랜치 → 이동할 곳 → 확인
 wt remove server fix PROJ-1 [--force] [-b|-B] [-r] [--to <dir>] -y

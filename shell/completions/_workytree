@@ -65,7 +65,7 @@ _workytree() {
       ;;
     status)
       (( idx == 1 )) && _workytree_values repo repos
-      _values -w flag --fetch --offline --stale --json --plain ;;
+      _values -w flag --fetch --offline --stale --json --plain --branches ;;
     project) (( idx == 1 )) && _values sub list add remove default || _workytree_values project projects ;;
     repo)    (( idx == 1 )) && _values sub list add remove || _files -/ ;;
     config)  (( idx == 1 )) && _values sub path get set edit ;;

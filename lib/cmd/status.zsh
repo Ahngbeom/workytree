@@ -6,11 +6,11 @@
 typeset -gi WT_STATUS_MAX_JOBS=8
 typeset -g  WT_STATUS_FZF_MIN=0.38
 typeset -g  ST_REPO='' ST_HEADER=''
-typeset -gi ST_FETCH=0 ST_OFFLINE=0 ST_STALE_FILTER=0 ST_STALE_DAYS=-1 ST_JSON=0 ST_PLAIN=0 ST_PROGRESS=0
+typeset -gi ST_FETCH=0 ST_OFFLINE=0 ST_STALE_FILTER=0 ST_STALE_DAYS=-1 ST_JSON=0 ST_PLAIN=0 ST_PROGRESS=0 ST_BRANCHES=0
 typeset -ga ST_RECS ST_LINES
 
 _status_parse_opts() {
-  ST_REPO='' ST_FETCH=0 ST_OFFLINE=0 ST_STALE_FILTER=0 ST_STALE_DAYS=-1 ST_JSON=0 ST_PLAIN=0
+  ST_REPO='' ST_FETCH=0 ST_OFFLINE=0 ST_STALE_FILTER=0 ST_STALE_DAYS=-1 ST_JSON=0 ST_PLAIN=0 ST_BRANCHES=0
   while (( $# )); do
     case "$1" in
       --fetch)   ST_FETCH=1 ;;
@@ -20,9 +20,10 @@ _status_parse_opts() {
         [[ "${2:-}" == <-> ]] && { ST_STALE_DAYS=$2; shift; } ;;
       --json)    ST_JSON=1 ;;
       --plain)   ST_PLAIN=1 ;;
-      -*|*$'\t'*) usage_error "usage: workytree status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain]" ;;
+      --branches) ST_BRANCHES=1 ;;
+      -*|*$'\t'*) usage_error "usage: workytree status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain] [--branches]" ;;
       *)
-        [[ -z "$ST_REPO" ]] || usage_error "usage: workytree status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain]"
+        [[ -z "$ST_REPO" ]] || usage_error "usage: workytree status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain] [--branches]"
         ST_REPO="$1" ;;
     esac
     shift
@@ -90,7 +91,11 @@ _status_collect_one() {
       wt_fetch_origin "$rp" >/dev/null 2>&1 || print -u2 -r -- "could not fetch origin; showing local refs"
     fi
     (( ST_OFFLINE )) || forge_pr_rows "$rp" > "$out.prs"
-    status_collect_repo "$project" "$name" "$rp" "$days" "$out.prs" > "$out.rows"
+    if (( ST_BRANCHES )); then
+      status_collect_branches "$project" "$name" "$rp" "$days" "$out.prs" > "$out.rows"
+    else
+      status_collect_repo "$project" "$name" "$rp" "$days" "$out.prs" > "$out.rows"
+    fi
   } 2> "$out.notes"
 }
 
@@ -137,6 +142,7 @@ _status_collect() {
 # oldest first within each (activity, or last commit for branches; unknown last). Main
 # checkouts are never cleanup candidates, so they go below the rows that are.
 _status_sort() {
+  if (( ST_BRANCHES )); then cat; return; fi
   local line ts
   local -a f
   local -i rank
@@ -155,7 +161,11 @@ _status_filter() {
   local -a f
   while IFS= read -r line; do
     f=("${(@ps:\t:)line}")
-    (( ! ST_STALE_FILTER )) || [[ "${f[9]}" == (safe|stale) ]] && print -r -- "$line"
+    if (( ST_BRANCHES )); then
+      (( ! ST_STALE_FILTER )) || [[ "${f[11]:-}" == safe || "${f[10]:-}" == stale ]] && print -r -- "$line"
+    else
+      (( ! ST_STALE_FILTER )) || [[ "${f[9]}" == (safe|stale) ]] && print -r -- "$line"
+    fi
   done
   return 0
 }
@@ -320,7 +330,10 @@ cmd_status() {
   [[ -t 2 ]] && ST_PROGRESS=1
   notes_file="$(mktemp 2>/dev/null)" || die "could not create a temp file"
   records="$(_status_records "$notes_file")" || { rc=$?; rm -f "$notes_file"; exit $rc; }
-  if (( ST_JSON )); then _status_render_json "$records" "$notes_file"
+  if (( ST_BRANCHES )); then
+    if (( ST_JSON )); then _branches_render_json "$records" "$notes_file"
+    else _branches_render_table "$records" "$notes_file"; fi
+  elif (( ST_JSON )); then _status_render_json "$records" "$notes_file"
   elif (( interactive )); then _status_run_fzf "$records" "$notes_file"
   else _status_render_table "$records" "$notes_file"; fi
   rm -f "$notes_file"
@@ -337,7 +350,7 @@ cmd___status-rows() {
   records="$(_status_records "$notes_file")" || { rc=$?; rm -f "$notes_file"; exit $rc; }
   rm -f "$notes_file"
   [[ -n "$records" ]] || return 0
-  _status_format "$records"
+  if (( ST_BRANCHES )); then _branches_format "$records"; else _status_format "$records"; fi
   _status_fzf_input
 }
 
