@@ -1,5 +1,18 @@
-# Branch classification for `wt status` branch mode: pure functions over names, shas and
-# states already collected. None of them calls git.
+# `wt status` branch mode: pure classification functions over names, shas and states already
+# collected (none of them calls git), and status_collect_branches, which reads those from git.
+#
+# status_collect_branches emits one record per branch name: 17 TAB-separated fields, "-" for
+# every empty value; split with "${(@ps:\t:)line}".
+#    1 type        branch|error                10 why        branch_row_why
+#    2 project                                 11 class      branch_why_class
+#    3 repo                                    12 commit_ts  newest of local and origin
+#    4 repo_path                               13 base_ahead largest among the sides to delete
+#    5 branch      name without origin/        14 key        ticket key of a backup name,
+#    6 local_sha   full sha                                  proven or not
+#    7 remote_sha  full sha                    15 pr_ref     PR whose head is this name
+#    8 gone        1 when the local upstream   16 pr_state
+#                  is gone, else 0             17 note       why, in words; error: git's
+#    9 owner       me|teammate|- (no origin)                 first line
 
 branch_protected() {
   setopt localoptions extendedglob
@@ -102,4 +115,149 @@ branch_why_class() {
     gone|stale|unmerged) REPLY=force ;;
     *) REPLY=none ;;
   esac
+}
+
+# status_collect_branches <project> <repo> <repo_path> <stale_days> [pr_file]
+# Branch records, oldest commit first, on stdout; reason lines on stderr; rc 0. A repo git
+# cannot read becomes one error record. Without a readable pr_file nothing is proven by a PR.
+status_collect_branches() {
+  local project=${1:--} repo=${2:--} repo_path=$3 stale_days=$4 pr_file=${5:-}
+  local -i now=$EPOCHSECONDS stale_s=$(( stale_days * 86400 ))
+  local porcelain line
+  if ! porcelain="$(git -C "$repo_path" worktree list --porcelain 2>&1)"; then
+    line="${${porcelain%%$'\n'*}//$'\t'/ }"
+    _status_emit error "$project" "$repo" "$repo_path" - - - 0 - - - - - - - - \
+      "${line:-git worktree list failed}"
+    return 0
+  fi
+  local -A checked_out
+  for line in "${(@f)porcelain}"; do
+    [[ $line == "branch refs/heads/"* ]] && checked_out[${line#branch refs/heads/}]=1
+  done
+
+  local base base_name=- base_show=-
+  if base="$(status_base_ref "$repo_path")"; then
+    base_show=${${base#refs/remotes/}#refs/heads/}
+    base_name=${${base#refs/remotes/origin/}#refs/heads/}
+  else
+    base=-
+    print -u2 -r -- "$repo: no base branch, so nothing counts as merged"
+  fi
+  local user_email
+  user_email="$(git -C "$repo_path" config user.email 2>/dev/null)"
+
+  local -A pr_ref pr_state pr_sha
+  local b r s u h
+  if [[ -n $pr_file && -r $pr_file ]]; then
+    while IFS=$'\t' read -r b r s u h; do pr_ref[$b]=$r pr_state[$b]=$s pr_sha[$b]=$h; done < "$pr_file"
+  fi
+
+  # Maps are keyed by full refname: %(refname:short) turns into heads/x when a tag x exists.
+  local fmt=$'%(refname)\t%(objectname)\t%(committerdate:unix)\t%(upstream)\t%(upstream:track,nobracket)\t%(authoremail)'
+  local refs= ref name
+  local -A r_sha r_ts r_up r_track r_email r_ahead in_base names
+  local -a f
+  [[ $base != - ]] && refs="$(git -C "$repo_path" for-each-ref --format="$fmt"$'\t'"%(ahead-behind:$base)" refs/heads refs/remotes/origin 2>/dev/null)"
+  [[ -n $refs ]] || refs="$(git -C "$repo_path" for-each-ref --format="$fmt" refs/heads refs/remotes/origin 2>/dev/null)"
+  for line in "${(@f)refs}"; do
+    [[ -n $line ]] || continue
+    f=("${(@ps:\t:)line}")
+    ref=${f[1]}
+    case $ref in
+      refs/heads/*) name=${ref#refs/heads/} ;;
+      refs/remotes/origin/HEAD) continue ;;
+      refs/remotes/origin/*) name=${ref#refs/remotes/origin/} ;;
+      *) continue ;;
+    esac
+    r_sha[$ref]=${f[2]} r_ts[$ref]=${f[3]} r_up[$ref]=${f[4]} r_track[$ref]=${f[5]} r_email[$ref]=${f[6]}
+    [[ ${f[7]:-} =~ '^[0-9]+ [0-9]+$' ]] && r_ahead[$ref]=${f[7]%% *}
+    names[$name]=1
+  done
+  if [[ $base != - ]]; then
+    for ref in ${(f)"$(git -C "$repo_path" for-each-ref --merged="$base" --format='%(refname)' refs/heads refs/remotes/origin 2>/dev/null)"}; do
+      in_base[$ref]=1
+    done
+  fi
+
+  local lref rref lsha rsha lwhy rwhy why cls owner key bk_state bk_refs note count ts del_ahead n
+  local -i gone protected backup_ok merged pushed via_pr side_age stale_age
+  local -a out del_refs
+  for name in ${(k)names}; do
+    [[ $name == "$base_name" ]] && continue
+    (( ${+checked_out[$name]} )) && continue
+    lref=refs/heads/$name rref=refs/remotes/origin/$name
+    lsha=${r_sha[$lref]:--} rsha=${r_sha[$rref]:--}
+    gone=0; [[ $lsha != - && ${r_track[$lref]} == gone ]] && gone=1
+    owner=-; [[ $rsha != - ]] && { branch_owner "${r_email[$rref]}" "$user_email"; owner=$REPLY; }
+    protected=0; branch_protected "$name" && protected=1
+    key=- bk_state=- bk_refs=-
+    if branch_backup_name "$name" && branch_ticket_key "$name"; then
+      key=$REPLY
+      if branch_ticket_pr "$key" "$pr_file"; then bk_state=$REPLY bk_refs=${(j:, :)reply}
+      else bk_state=skipped; fi
+    fi
+    backup_ok=0; [[ $bk_state == merged ]] && backup_ok=1
+
+    lwhy=- rwhy=- via_pr=0 stale_age=-1 del_refs=()
+    for ref in $lref $rref; do
+      [[ -n ${r_sha[$ref]:-} ]] || continue
+      merged=0 pushed=0
+      status_merged_rule $(( ${+in_base[$ref]} )) "${pr_state[$name]:-}" "${pr_sha[$name]:-}" "${r_sha[$ref]}" && merged=1
+      side_age=$(( now - ${r_ts[$ref]} ))
+      if [[ $ref == "$lref" ]]; then
+        [[ $owner == teammate ]] \
+          && branch_pushed "$name" "$lsha" "$rsha" "${r_up[$lref]}" "${r_track[$lref]}" && pushed=1
+        branch_side_why $protected $merged $pushed $backup_ok $gone $side_age $stale_s; lwhy=$REPLY
+        del_refs+=($ref)
+      else
+        branch_side_why $protected $merged 0 $backup_ok 0 $side_age $stale_s; rwhy=$REPLY
+        [[ $owner == me ]] && del_refs+=($ref)
+      fi
+      if [[ $owner == me || $ref == "$lref" ]]; then
+        (( merged && ! ${+in_base[$ref]} )) && via_pr=1
+        [[ $REPLY == stale ]] && (( stale_age < 0 || side_age < stale_age )) && stale_age=$side_age
+      fi
+    done
+    branch_row_why $lwhy $rwhy $owner; why=$REPLY
+    branch_why_class $why; cls=$REPLY
+
+    ts=${r_ts[$lref]:-0}
+    (( ${r_ts[$rref]:-0} > ts )) && ts=${r_ts[$rref]}
+    del_ahead=-
+    if [[ $cls != none ]]; then
+      for ref in $del_refs; do
+        n=${r_ahead[$ref]:-}
+        [[ -n $n ]] || { del_ahead=-; break; }
+        if [[ $del_ahead == - ]] || (( n > del_ahead )); then del_ahead=$n; fi
+      done
+    fi
+
+    count="commits not in $base_show"; [[ $del_ahead != - ]] && count="$del_ahead $count"
+    case $why in
+      protected) note=protected ;;
+      read-only) note="origin branch by ${r_email[$rref]//[<>]/}" ;;
+      merged) if (( via_pr )); then note="PR ${pr_ref[$name]} merged"; else note="merged into $base_show"; fi ;;
+      pushed) note="same as origin/$name" ;;
+      backup) note="backup of $key (PR $bk_refs merged)" ;;
+      *)
+        case $bk_state in
+          open) note="backup of $key: PR $bk_refs open" ;;
+          none) note="backup of $key: no merged PR" ;;
+          skipped) note="backup of $key: PR lookup skipped" ;;
+          *)
+            case $why in
+              gone) note="upstream deleted, $count" ;;
+              stale) status_fmt_age $stale_age; note="$REPLY old, $count" ;;
+              *) note=$count ;;
+            esac
+            ;;
+        esac
+        ;;
+    esac
+    f=(branch "$project" "$repo" "$repo_path" "$name" "$lsha" "$rsha" $gone "$owner" "$why" "$cls"
+       "$ts" "$del_ahead" "$key" "${pr_ref[$name]:--}" "${pr_state[$name]:--}" "${note//$'\t'/ }")
+    out+=("${(l:12::0:)ts}"$'\t'"${(pj:\t:)f}")
+  done
+  for line in "${(@on)out}"; do print -r -- "${line#*$'\t'}"; done
+  return 0
 }
