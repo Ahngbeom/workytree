@@ -72,7 +72,7 @@ if (( ! ${@[(Ie)--demo-bare]} )); then
     gd="$(git -C "$wts/web/chore/deps" rev-parse --absolute-git-dir)"
     touch -t 202607010900 "$gd/index" "$gd/HEAD" "$gd/logs/HEAD"  # untouched for months → ●
 
-    git -C "$HOME/work/products/mobile" branch hotfix/CRASH-9     # branch without a worktree
+    git -C "$HOME/work/products/mobile" branch hotfix/CRASH-9     # branch without a worktree (shown by `wt status --branches`)
     mkdir -p "$wts/mobile/fix/OLD-1" && print leftover > "$wts/mobile/fix/OLD-1/notes.txt"  # orphan dir
   }
 fi

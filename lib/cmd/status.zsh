@@ -138,8 +138,8 @@ _status_collect() {
   rm -rf "$tmp"
 }
 
-# _status_sort: records on stdin -> worktrees, branches, orphans, main checkouts, errors;
-# oldest first within each (activity, or last commit for branches; unknown last). Main
+# _status_sort: records on stdin -> worktrees, orphans, main checkouts, errors;
+# oldest first within each (activity; unknown last). Main
 # checkouts are never cleanup candidates, so they go below the rows that are.
 _status_sort() {
   if (( ST_BRANCHES )); then cat; return; fi
@@ -149,8 +149,8 @@ _status_sort() {
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     f=("${(@ps:\t:)line}")
-    case "${f[1]}" in worktree) rank=1 ;; branch) rank=2 ;; orphan) rank=3 ;; main) rank=4 ;; *) rank=5 ;; esac
-    ts="${f[11]}"; [[ "${f[1]}" == branch ]] && ts="${f[13]}"
+    case "${f[1]}" in worktree) rank=1 ;; orphan) rank=2 ;; main) rank=3 ;; *) rank=4 ;; esac
+    ts="${f[11]}"
     [[ "$ts" == <-> ]] || ts=9999999999
     print -r -- "$rank"$'\t'"$ts"$'\t'"$line"
   done | sort -t $'\t' -k1,1n -k2,2n -s | cut -f3-
@@ -237,7 +237,7 @@ _status_print_notes() {
 _status_render_table() {
   local records="$1" notes_file="$2"
   if [[ -z "$records" ]]; then
-    warn "no worktrees or branches found"
+    warn "no worktrees found"
   else
     _status_format "$records"
     print -r -- "$ST_HEADER"
@@ -440,7 +440,7 @@ cmd___status-preview() {
   [[ "$p" != - ]] && print -r -- "path      $p"
   if [[ "$type" == error ]]; then print -r -- "error     ${f[26]}"; return 0; fi
   [[ "$type" == (main|worktree) ]] && print -r -- "created   $(_status_when "${f[12]}")"
-  [[ "$type" != branch ]] && print -r -- "active    $(_status_when "${f[11]}")"
+  print -r -- "active    $(_status_when "${f[11]}")"
   if [[ "$br" != - ]]; then
     created="$(git -C "$repo_path" reflog show --date=unix --format=%gd "refs/heads/$br" -- 2>/dev/null | tail -1)"
     created="${${created##*\{}%\}}"
@@ -465,10 +465,6 @@ cmd___status-preview() {
       fi
       print; print -r -- "recent commits:"
       git -C "$p" log --oneline -5 2>/dev/null | sed 's/^/  /' ;;
-    branch)
-      print; print -r -- "recent commits:"
-      git -C "$repo_path" log --oneline -5 "refs/heads/$br" -- 2>/dev/null | sed 's/^/  /'
-      print; print -r -- "delete it yourself: git -C ${(q)repo_path} branch -d ${(q)br}" ;;
     orphan)
       print
       if dir_is_cruft_only "$p"; then print -r -- "holds only IDE/OS files; \`wt prune ${f[3]}\` removes it"
@@ -499,7 +495,6 @@ cmd___status-action() {
         ( WT_PROJECT_OPT="${f[2]}"; builtin cd -- "${f[4]}" 2>/dev/null; cmd_remove "${f[3]}" "${f[6]}" "${f[7]}" )
       else
         warn "only worktrees under worktree_root can be removed from here"
-        [[ "${f[1]}" == branch ]] && hint "delete the branch yourself: git -C ${(q)f[4]} branch -d ${(q)f[8]}"
         [[ "${f[1]}" == orphan ]] && hint "wt prune ${f[3]} removes orphan directories that hold only IDE/OS files"
       fi
       _status_pause ;;

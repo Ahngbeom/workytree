@@ -128,11 +128,14 @@ test_locked_worktree_is_never_safe() {
   assert_eq "$(field fix/LOCK 9)" -
 }
 
-test_branch_without_worktree_is_listed_but_base_is_not() {
+test_branch_without_worktree_moves_to_branch_mode() {
   fixture
   git -C "$HOME/src/app" branch lonely
   load_rows
-  assert_eq "$(field lonely 1)" branch
+  assert_eq "$(field lonely 1)" MISSING
+  local plain; plain="$(wt status --offline --plain 2>/dev/null)"
+  assert_eq "${plain//lonely/}" "$plain" "worktree view omits the branch"
+  assert_contains "$(wt status --offline --plain --branches 2>/dev/null)" lonely
   local line n=0
   for line in "${(@f)ROWS}"; do [[ "$line" == *$'\tmain\t'* ]] && (( ++n )); done
   assert_eq "$n" 1 "main appears once (as the main checkout)"
@@ -220,13 +223,21 @@ test_plain_table_when_stdout_is_not_a_terminal() {
 
 test_json_is_valid_and_escapes_branch_names() {
   fixture
-  git -C "$HOME/src/app" branch 'fix/q"x'
+  git -C "$HOME/src/app" worktree add -q "$HOME/wts/app/fix/qx" -b 'fix/q"x'
   local out; out="$(wt status --offline --json)"
   assert_contains "$out" '"branch":"fix/q\"x"'
   if (( $+commands[python3] )); then
     print -r -- "$out" | python3 -c 'import json,sys; json.load(sys.stdin)'
     assert_eq "$?" 0 valid-json
   fi
+}
+
+test_stale_and_json_have_no_branch_rows() {
+  fixture
+  git -C "$HOME/src/app" branch lonely
+  local out; out="$(wt status --offline --stale --json 2>/dev/null)"
+  local pat='"type":"branch"'
+  assert_eq "${out//"$pat"/}" "$out" "no branch rows"
 }
 
 test_stale_days_config_is_used() {

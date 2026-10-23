@@ -3,8 +3,8 @@
 # install ahead of any fake executable). The stub records its arguments and answers with a
 # canned selection.
 source "${0:A:h}/helpers.zsh"
-for f in ui config resolve prompt worktree forge status; do source "$WT_TEST_ROOT/lib/$f.zsh"; done
-for f in prune remove status; do source "$WT_TEST_ROOT/lib/cmd/$f.zsh"; done
+for f in ui config resolve prompt worktree forge status branches; do source "$WT_TEST_ROOT/lib/$f.zsh"; done
+for f in prune remove status status_branches; do source "$WT_TEST_ROOT/lib/cmd/$f.zsh"; done
 
 fixture() {
   make_repo "$HOME/src/app"
@@ -12,6 +12,7 @@ fixture() {
   typeset -gA WT_PCFG=(me.repo_root "$HOME/src" me.worktree_root "$HOME/wts") WT_CFG=() WT_RCFG=()
   git -C "$HOME/src/app" worktree add -q -b fix/A "$HOME/wts/app/fix/A"
   git -C "$HOME/src/app" branch lonely
+  mkdir -p "$HOME/wts/app/fix/ORPH"
   WORKYTREE_HOME="$HOME/with space/workytree"
   WT_PROJECT_OPT='' WT_COLOR=0
   _status_parse_opts --offline
@@ -40,8 +41,8 @@ test_enter_on_worktree_prints_its_path_last() {
   assert_eq "$(_status_run_fzf "$RECORDS" "$HOME/notes")" "$HOME/wts/app/fix/A"
 }
 
-test_enter_on_branch_row_prints_nothing() {
-  fixture; fzf_selecting branch
+test_enter_on_orphan_row_prints_nothing() {
+  fixture; fzf_selecting orphan
   assert_eq "$(_status_run_fzf "$RECORDS" "$HOME/notes")" ""
 }
 
@@ -121,10 +122,10 @@ test_old_fzf_falls_back() {
 
 test_action_refuses_non_worktree_rows() {
   fixture
-  local branch_line; branch_line="$(print -r -- "$RECORDS" | grep '^branch')"
-  local err; err="$(cmd___status-action remove "$branch_line" 2>&1 </dev/null)"
+  local orphan_line; orphan_line="$(print -r -- "$RECORDS" | grep '^orphan')"
+  local err; err="$(cmd___status-action remove "$orphan_line" 2>&1 </dev/null)"
   assert_contains "$err" "only worktrees under worktree_root can be removed from here"
-  assert_contains "$err" "branch -d lonely"
+  assert_contains "$err" "wt prune app"
 }
 
 # ctrl-d runs remove in a child of status; the parent prints the main checkout last and the
@@ -145,7 +146,7 @@ test_action_remove_from_inside_leaves_the_cwd_to_the_parent() {
 test_display_field_carries_the_searchable_tags() {
   fixture; fzf_selecting none
   _status_run_fzf "$RECORDS" "$HOME/notes" >/dev/null
-  local line; line="$(grep $'^branch\t' "$HOME/fzf.in")"
+  local line; line="$(grep -F "fix/A" "$HOME/fzf.in" | grep $'^worktree\t')"
   local -a f; f=("${(@ps:\t:)line}")
   assert_contains "${f[27]}" "safe merged"
 }
