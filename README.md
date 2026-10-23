@@ -182,6 +182,27 @@ fzf 0.38 이상이 있고 양쪽이 터미널이면 상세 창이 있는 fzf 목
 | `ctrl-b` | 워크트리 목록으로 |
 | `enter` | 아무 동작 없음(목록 유지) |
 
+`alt-d`는 터미널로 나와 다음 순서로 진행하고, 키를 누르면 목록으로 돌아간다.
+
+1. 원격 쪽을 지우거나 `pushed`를 확인해야 하는 repo만 `origin`을 fetch한다. fetch가 실패한 repo는 원격을 건너뛰고 `pushed` 행을 needs force로 내린다
+2. 표시한 행을 지금 ref로 다시 판정해 safe / needs force / skipped 계획을 출력한다. 목록을 띄운 뒤 바뀐 것은 계획에 반영된다
+3. safe 묶음 전체를 한 번 묻고, needs force는 브랜치마다 잃을 커밋 수와 함께 따로 묻는다. 기본값은 모두 아니오
+4. 승인한 항목을 로컬 → 원격 순서로 지운다. 판정한 뒤 움직인 로컬 브랜치는 남기고, 원격은 판정한 커밋을 가리킬 때만 지운다(`--force-with-lease`)
+5. ref마다 `✓`(지움, `(was <sha>)`와 복구 명령), `✗`(실패, git 메시지와 재시도 명령), `–`(남김) 결과와 삭제 로그 경로를 출력한다
+
+| 등급 | 뜻 | 확인 |
+|---|---|---|
+| `merged` | base에 병합됐거나 PR/MR이 그 커밋 그대로 병합됨 | safe |
+| `pushed` | 로컬만 지움. 남겨 둘 `origin` 브랜치에 로컬 커밋이 모두 있음 | safe |
+| `backup` | 백업 이름(`backup/*`, `*-backup`, `*-backup-*`, `*-before-*`)이고, 이름의 티켓 키를 head에 가진 PR 중 병합된 것이 있고 열린 것이 없음. 백업에만 있는 커밋도 함께 지움 | safe |
+| `gone`, `stale`, `unmerged` | 병합이 증명되지 않음 | needs force |
+| `read-only`, `protected` | 동료 원격, `main`·`master`·`develop`·`release/*` | 지우지 않음 |
+
+- 한 행은 그 브랜치의 로컬과 본인 원격을 함께 지운다. 원격은 tip 작성자가 그 repo의 `user.email`(대소문자 무시)이고 base에 없는 커밋도 모두 본인 것일 때만 지우고, 아니면 로컬만 지운다
+- 로컬은 판정한 커밋을 가리킬 때 `git branch -D`로 지운다. squash 병합·백업 브랜치는 `-d`가 거부하기 때문이다
+- 지운 ref는 `~/.local/state/workytree/deleted.log`(`XDG_STATE_HOME`)에 시각·repo·ref·sha·복구 명령으로 남는다. 결과 화면이 사라져도 이 파일로 되살릴 수 있지만, 다른 ref에 없는 커밋은 git gc 유예(기본 2주)가 지나면 되살릴 수 없다
+- `--plain`, `-y`, 터미널 없음에서는 브랜치 모드도 표로만 출력하고 지우지 않는다
+
 PR/MR 정보는 repo마다 한 번씩 `gh`(GitHub)나 `glab`(GitLab, `glab`이 로그인한 self-hosted 포함)을 호출해 가져온다. 둘 다 없거나 `--offline`이면 PR 열만 비고 나머지는 그대로 동작한다. squash·rebase 병합은 git이 추적할 조상 관계를 남기지 않으므로, 그런 브랜치는 PR/MR을 조회할 수 있을 때만 병합됨으로 표시된다.
 
 ```sh

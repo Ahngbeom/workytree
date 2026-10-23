@@ -403,13 +403,63 @@ _branches_ask() {
   return 0
 }
 
-# _branches_delete <records_file>: alt-d. Plan, print, ask.
+# _branches_execute: deletes BR_APPROVED, each local side before its origin side, then prints a
+# result row per ref (approved, declined and skipped) and the deletion log path, on stderr.
+_branches_execute() {
+  local e rp b target side lsha rsha text
+  local -a f done_rows kept_rows
+  local -i w1=0 w2=0 deleted=0
+  if (( ! ${#BR_APPROVED} )); then dim "nothing deleted" >&2; return 0; fi
+  for e in "${BR_PLAN[@]}"; do
+    f=("${(@ps:\t:)e}")
+    (( ${#BR_REPO_NAME[${f[2]}]} > w1 )) && w1=${#BR_REPO_NAME[${f[2]}]}
+    (( ${#f[3]} > w2 )) && w2=${#f[3]}
+  done
+  for e in "${BR_PLAN[@]}"; do
+    f=("${(@ps:\t:)e}")
+    rp="${f[2]}" b="${f[3]}" target="${f[4]}" lsha="${f[5]}" rsha="${f[6]}"
+    if (( ! ${BR_APPROVED[(Ie)$e]} )); then
+      case "$target" in local+origin) side=both ;; *) side="$target" ;; esac
+      case "${f[1]}" in
+        skip) text="kept (${f[7]})" ;;
+        force) text="kept (force declined)" ;;
+        *) text="kept (declined)" ;;
+      esac
+      kept_rows+=("skip"$'\t'"${(r:6:)side}  ${(r:w1:)BR_REPO_NAME[$rp]}  ${(r:w2:)b}  $text")
+      continue
+    fi
+    if [[ "$target" == local* ]]; then
+      side="${(r:6:):-local}  ${(r:w1:)BR_REPO_NAME[$rp]}  ${(r:w2:)b}"
+      if remove_branch "$rp" "$b" 1 "$lsha" >&2; then
+        done_rows+=("ok"$'\t'"$side  deleted (was $REPLY)"); (( ++deleted ))
+      elif [[ "$(git -C "$rp" rev-parse -q --verify "refs/heads/$b" 2>/dev/null)" != (|$lsha) ]]; then
+        done_rows+=("fail"$'\t'"$side  kept (moved since it was checked)")
+      else
+        done_rows+=("fail"$'\t'"$side  not deleted")
+      fi
+    fi
+    if [[ "$target" == *origin ]]; then
+      side="origin  ${(r:w1:)BR_REPO_NAME[$rp]}  ${(r:w2:)b}"
+      if remove_remote_branch "$rp" origin "$b" "$rsha" >&2; then
+        done_rows+=("ok"$'\t'"$side  deleted (was $REPLY)"); (( ++deleted ))
+      else
+        done_rows+=("fail"$'\t'"$side  not deleted")
+      fi
+    fi
+  done
+  _rm_print_results "${done_rows[@]}" "${kept_rows[@]}"
+  (( deleted )) && print -u2 -r -- "deletion log: $(wt_state_dir)/deleted.log"
+  return 0
+}
+
+# _branches_delete <records_file>: alt-d. Plan, print, ask, delete what was approved.
 _branches_delete() {
   _branches_plan "$1"
   BR_APPROVED=()
   if (( ${#BR_PLAN} )); then
     _branches_print_plan
     _branches_ask
+    _branches_execute
   else
     warn "no branch rows marked"
   fi

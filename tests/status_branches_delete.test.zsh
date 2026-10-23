@@ -1,10 +1,12 @@
 #!/usr/bin/env zsh
-# alt-d in branch mode: the plan re-judged from fresh refs, and its questions. Every test
-# answers n, so nothing is deleted here.
+# alt-d in branch mode: the plan re-judged from fresh refs, its questions, and the deletion of
+# what was approved.
 source "${0:A:h}/helpers.zsh"
 for f in "$WT_TEST_ROOT"/lib/*.zsh "$WT_TEST_ROOT"/lib/cmd/*.zsh; do source "$f"; done
 _status_pause() { :; }
 functions[_real_wt_fetch_origin]=$functions[wt_fetch_origin]
+functions -c remove_branch real_remove_branch
+functions -c remove_remote_branch real_remove_remote_branch
 
 typeset -g A=''
 functions[_helpers_setup_env]=$functions[setup_env]
@@ -17,6 +19,8 @@ setup_env() {
   _status_parse_opts
   forge_pr_rows() { [[ -r "$HOME/prs" ]] && cat "$HOME/prs"; return 0; }
   functions[wt_fetch_origin]=$functions[_real_wt_fetch_origin]
+  functions[remove_branch]=$functions[real_remove_branch]
+  functions[remove_remote_branch]=$functions[real_remove_remote_branch]
 }
 
 # app_with_origin [dir]: <dir> (default ~/src/app) on main, pushed to bare ~/remote.git,
@@ -155,7 +159,6 @@ test_yes_answers_fill_the_approved_list() {
   assert_eq "${#approved}" 2 two-approved
   assert_eq "${approved[1]}" "$(plan_has safe fix/m local+origin)" safe-approved
   assert_eq "${approved[2]}" "$(plan_has force fix/old2 local)" second-force-approved
-  assert_contains "$(git -C "$A" branch --list fix/m)" fix/m "8a deletes nothing"
 }
 
 backup_fixture() {
@@ -408,6 +411,100 @@ test_status_action_routes_delete_branches() {
   assert_eq "$(<"$HOME/out")" "" "plan stays off stdout"
   local err; err="$( (cmd___status-action delete-branches) 2>&1 )"
   assert_contains "$err" "delete-branches <file>"
+}
+
+# deleted_log: ~/.local/state/workytree/deleted.log, or empty.
+deleted_log() { local l="$XDG_STATE_HOME/workytree/deleted.log"; [[ -r "$l" ]] && print -r -- "$(<"$l")"; }
+# result <branch>: the summary lines that name <branch>.
+result() { local out="${$(<"$HOME/err")#*summary}"; print -r -- "${(M)${(@f)out}:#*  $1  *}"; }
+
+test_safe_rows_are_deleted_after_one_yes() {
+  app_with_origin
+  merged_branch fix/m
+  local sha; sha="$(git -C "$A" rev-parse fix/m)"
+  mark fix/m
+  delete_marked y
+  assert_eq "$(<"$HOME/rc")" 0 rc
+  assert_eq "$(git -C "$A" branch --list fix/m)" "" local-gone
+  assert_eq "$(git -C "$HOME/remote.git" branch --list fix/m)" "" remote-gone
+  assert_contains "$(<"$HOME/err")" "(was ${sha[1,7]})" was-sha
+  assert_contains "$(<"$HOME/err")" "restore it with:" restore-hint
+  assert_contains "$(result fix/m)" "✓ local   app  fix/m  deleted (was ${sha[1,7]})" local-row
+  assert_contains "$(result fix/m)" "✓ origin  app  fix/m  deleted (was ${sha[1,7]})" origin-row
+  assert_eq "$(deleted_log | grep -c .)" 2 two-log-lines
+  assert_contains "$(deleted_log)" $'\trefs/heads/fix/m\t'"$sha"$'\t' log-local
+  assert_contains "$(deleted_log)" $'\trefs/remotes/origin/fix/m\t'"$sha"$'\t' log-origin
+  assert_contains "$(<"$HOME/err")" "deletion log: $XDG_STATE_HOME/workytree/deleted.log" log-pointer
+}
+
+test_force_rows_are_asked_one_by_one() {
+  app_with_origin
+  stale_branch fix/old; stale_branch fix/old2
+  mark fix/old fix/old2
+  delete_marked y n
+  assert_eq "$(git -C "$A" branch --list fix/old)" "" first-deleted
+  assert_contains "$(git -C "$A" branch --list fix/old2)" fix/old2 second-kept
+  assert_contains "$(result fix/old2)" "– local   app  fix/old2  kept (force declined)" declined-row
+  assert_eq "$(deleted_log | grep -c .)" 1 one-log-line
+}
+
+test_pushed_row_deletes_local_only() {
+  app_with_origin
+  teammate_remote fix/t
+  git -C "$A" branch -q --no-track fix/t origin/fix/t
+  local sha; sha="$(git -C "$A" rev-parse fix/t)"
+  mark fix/t
+  delete_marked y
+  assert_eq "$(git -C "$A" branch --list fix/t)" "" local-gone
+  assert_eq "$(git -C "$HOME/remote.git" rev-parse fix/t)" "$sha" remote-kept
+  assert_eq "$(result fix/t | grep -c origin)" 0 "no origin row"
+}
+
+test_branch_that_moved_after_judging_is_kept() {
+  app_with_origin
+  merged_branch fix/m
+  mark fix/m
+  git -C "$A" commit-tree -p fix/m -m moved "fix/m^{tree}" > "$HOME/moved"
+  remove_branch() { git -C "$1" update-ref "refs/heads/$2" "$(<"$HOME/moved")"; real_remove_branch "$@"; }
+  delete_marked y
+  assert_eq "$(git -C "$A" rev-parse fix/m)" "$(<"$HOME/moved")" kept-at-new-tip
+  assert_contains "$(result fix/m)" "✗ local   app  fix/m  kept (moved since it was checked)" fail-row
+  assert_eq "$(deleted_log | grep -c $'\trefs/heads/')" 0 "not in the log"
+}
+
+test_remote_that_moved_fails_the_lease() {
+  app_with_origin
+  merged_branch fix/m
+  mark fix/m
+  git clone -q -b fix/m "$HOME/remote.git" "$HOME/other"
+  git -C "$HOME/other" commit -q --allow-empty -m moved
+  remove_remote_branch() { git -C "$HOME/other" push -q origin fix/m; real_remove_remote_branch "$@"; }
+  delete_marked y
+  assert_eq "$(git -C "$HOME/remote.git" rev-parse fix/m)" "$(git -C "$HOME/other" rev-parse fix/m)" remote-kept
+  assert_eq "$(git -C "$A" branch --list fix/m)" "" local-deleted
+  assert_contains "$(result fix/m)" "✗ origin  app  fix/m  not deleted" fail-row
+  assert_eq "$(deleted_log | grep -c $'\trefs/remotes/')" 0 "origin not in the log"
+}
+
+test_repo_without_origin_deletes_locally_without_fetch() {
+  make_repo "$A"
+  merged_branch fix/m
+  mark fix/m
+  wt_fetch_origin() { print -r -- "$1" >> "$HOME/fetches"; return 0; }
+  delete_marked y
+  assert_not_exists "$HOME/fetches"
+  assert_eq "$(git -C "$A" branch --list fix/m)" "" local-deleted
+  assert_contains "$(result fix/m)" "✓ local   app  fix/m  deleted" ok-row
+}
+
+test_nothing_approved_prints_no_results() {
+  app_with_origin
+  merged_branch fix/m
+  mark fix/m
+  delete_marked n
+  assert_eq "${$(<"$HOME/err")#*summary}" "$(<"$HOME/err")" no-summary
+  assert_contains "$(<"$HOME/err")" "nothing deleted"
+  assert_eq "${$(<"$HOME/err")#*deletion log:}" "$(<"$HOME/err")" no-log-pointer
 }
 
 run_tests

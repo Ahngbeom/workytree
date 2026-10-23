@@ -240,7 +240,7 @@ Claude Code의 셸 스냅숏은 함수 정의를 옮기지만, 관찰한 결과 
 | merged | origin 기본 브랜치(fetch 직후)의 조상이거나, PR이 같은 tip에서 병합됨(`pr_sha == tip`, forge 조회가 `WT_FORGE_TIMEOUT` 안에 끝났을 때만). 오프라인이면 조상 판정만 |
 | pushed | 자기 upstream에서만 닿음. 삭제 기본값을 예로 만들지 않음 |
 | gone, unmerged | 별도 라벨. 삭제 기본값을 예로 만들지 않음 |
-| 불변식 | `-B` 없이는 어떤 커밋도 마지막 ref를 잃지 않음 |
+| 불변식 | `-B` 없이는 어떤 커밋도 마지막 ref를 잃지 않음. 예외: 머지된 PR이 있고 열린 PR이 없는 티켓의 백업 브랜치(브랜치 모드, 2026-10-23-branch-cleanup-design) |
 | 대상 브랜치 | create와 remove는 `<kind>/<ticket>` 기준. 실제 체크아웃된 브랜치는 항상 보고하고 몰래 바꾸지 않음 |
 | 복구 | 브랜치를 지울 때마다 `(was <sha>)`와 복원 명령 출력 |
 
