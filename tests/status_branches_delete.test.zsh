@@ -261,7 +261,9 @@ test_plan_line_shows_both_shas_when_tips_differ() {
 
 test_leftover_origin_refs_without_a_remote_are_not_trusted() {
   app_with_origin
-  merged_branch fix/m
+  git -C "$A" switch -q -c fix/m; commit; git -C "$A" push -q -u origin fix/m
+  git -C "$A" switch -q main
+  printf 'fix/m\t#2\tmerged\tu\t%s\n' "$(git -C "$A" rev-parse fix/m)" > "$HOME/prs"
   teammate_remote fix/t
   git -C "$A" branch -q --no-track fix/t origin/fix/t
   local -A keep; local r
@@ -320,10 +322,59 @@ test_remote_all_mine() {
   local main_sha; main_sha="$(git -C "$A" rev-parse main)"
   _branches_remote_all_mine "$A" refs/remotes/origin/main "$own" T@T; assert_eq $? 0 own-any-case
   _branches_remote_all_mine "$A" refs/remotes/origin/main "$mix" t@t; assert_eq $? 1 mixed
-  _branches_remote_all_mine "$A" - "$mix" t@t; assert_eq $? 0 tip-only-without-base
-  _branches_remote_all_mine "$A" - "$tip" t@t; assert_eq $? 1 teammate-tip
-  _branches_remote_all_mine "$A" refs/remotes/origin/main "$main_sha" t@t; assert_eq $? 0 merged-checks-the-tip
+  _branches_remote_all_mine "$A" refs/remotes/origin/main "$tip" t@t; assert_eq $? 1 teammate-tip
+  _branches_remote_all_mine "$A" - "$own" t@t; assert_eq $? 1 never-without-base
+  _branches_remote_all_mine "$A" refs/remotes/origin/main "$main_sha" t@t; assert_eq $? 1 no-own-commits
+  _branches_remote_all_mine "$A" refs/remotes/origin/main "$main_sha" t@t fix/own; assert_eq $? 1 no-own-commits-untracked
+  git -C "$A" branch -q fix/z main; git -C "$A" push -q -u origin fix/z
+  _branches_remote_all_mine "$A" refs/remotes/origin/main "$main_sha" t@t fix/z; assert_eq $? 0 no-own-commits-tracked
+  _branches_remote_all_mine "$A" refs/remotes/origin/main "$main_sha" x@y fix/z; assert_eq $? 1 no-own-commits-tracked-other-tip
   _branches_remote_all_mine "$A" refs/remotes/origin/main "$own" ''; assert_eq $? 1 no-email
+}
+
+# mate_branch <name>: <name> pushed by a teammate's clone at origin/main, with no commits of
+# its own, so its tip is main's tip, authored by t@t.
+mate_branch() {
+  git clone -q -b main "$HOME/remote.git" "$HOME/mate"
+  git -C "$HOME/mate" push -q origin "main:refs/heads/$1"
+  git -C "$A" fetch -q origin
+}
+
+test_teammate_branch_at_my_base_tip_is_never_deleted_from_origin() {
+  app_with_origin
+  mate_branch feature/new
+  mark feature/new
+  forge_marked 9=me 10=merged 11=safe
+  delete_marked y
+  assert_eq "$(plan_has safe feature/new origin)" MISSING no-origin
+  assert_eq "$(plan_has safe feature/new local+origin)" MISSING no-both
+  assert_contains "$(git -C "$HOME/remote.git" branch --list feature/new)" feature/new origin-kept
+}
+
+test_open_pr_keeps_origin_even_when_tracked_locally() {
+  app_with_origin
+  git -C "$A" switch -q -c feature/z; git -C "$A" push -q -u origin feature/z
+  git -C "$A" switch -q main
+  merged_branch fix/m
+  printf 'feature/z\t!9\topen\tu\t%s\nfix/m\t!3\topen\tu\t%s\n' \
+    "$(git -C "$A" rev-parse feature/z)" "$(git -C "$A" rev-parse fix/m)" > "$HOME/prs"
+  mark feature/z fix/m
+  delete_marked y
+  assert_contains "$(plan_has skip feature/z origin)" "PR !9 is open" zero-commit-skip
+  assert_contains "$(plan_has skip fix/m origin)" "PR !3 is open" merged-skip
+  assert_eq "${$(plan_has safe fix/m local)%%$'\t'*}" safe local-still-planned
+  assert_contains "$(git -C "$HOME/remote.git" branch --list feature/z fix/m)" feature/z origin-kept
+  assert_contains "$(git -C "$HOME/remote.git" branch --list fix/m)" fix/m merged-origin-kept
+}
+
+test_own_branch_without_commits_tracked_locally_is_deleted_from_origin() {
+  app_with_origin
+  git -C "$A" switch -q -c feature/z; git -C "$A" push -q -u origin feature/z
+  git -C "$A" switch -q main
+  mark feature/z
+  delete_marked y
+  assert_eq "${$(plan_has safe feature/z local+origin)%%$'\t'*}" safe both-planned
+  assert_eq "$(git -C "$HOME/remote.git" branch --list feature/z)" "" origin-deleted
 }
 
 test_fetch_failure_skips_remote_and_downgrades_pushed() {

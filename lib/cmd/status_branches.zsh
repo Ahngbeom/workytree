@@ -193,19 +193,20 @@ cmd___status-branch-preview() {
 typeset -ga BR_PLAN BR_PLAN_AHEAD BR_APPROVED
 typeset -gA BR_REPO_NAME
 
-# _branches_remote_all_mine <repo_path> <base_ref|-> <remote_sha> <user_email>: rc 0 when the
-# tip and every commit of base..sha (only the tip when base is -) were authored by user_email,
-# ignoring case.
+# _branches_remote_all_mine <repo_path> <base_ref> <remote_sha> <user_email> <branch>: rc 0
+# when every commit of base..sha was authored by user_email, ignoring case. With no such
+# commit, only when refs/heads/<branch> tracks origin/<branch> and user_email authored the tip.
+# A base of - is never proven.
 _branches_remote_all_mine() {
-  local rp="$1" base="$2" sha="$3" email="${(L)4}" out='' a
-  [[ -n "$email" ]] || return 1
-  if [[ "$base" != - ]]; then
-    out="$(git -C "$rp" log --format=%ae "$sha" --not "$base" -- 2>/dev/null)" || return 1
-  fi
+  local rp="$1" base="$2" sha="$3" email="${(L)4}" b="${5:-}" out a
+  [[ -n "$email" && "$base" != - ]] || return 1
+  out="$(git -C "$rp" log --format=%ae "$sha" --not "$base" -- 2>/dev/null)" || return 1
   if [[ -z "$out" ]]; then
+    [[ -n "$b" ]] || return 1
+    [[ "$(git -C "$rp" for-each-ref --format='%(upstream)' "refs/heads/$b" 2>/dev/null)" == "refs/remotes/origin/$b" ]] || return 1
     out="$(git -C "$rp" log -1 --format=%ae "$sha" -- 2>/dev/null)" || return 1
+    [[ -n "$out" ]] || return 1
   fi
-  [[ -n "$out" ]] || return 1
   for a in "${(@f)out}"; do [[ "${(L)a}" == "$email" ]] || return 1; done
   return 0
 }
@@ -238,7 +239,7 @@ _br_plan_unlisted() {
 # (after fetching origin where a remote or pushed row needs it). BR_REPO_NAME maps repo_path
 # to the repo name. Of each line only project, repo, repo_path, branch, owner and why are read.
 _branches_plan() {
-  local file="$1" line rp b key tmp prs days l base email rec lsha rsha owner why cls note ahead target unfetched
+  local file="$1" line rp b key tmp prs days l base email rec lsha rsha owner why cls note ahead target unfetched pr_open
   local -a f order marked_rp marked_b
   local -A project seen need_fetch fetched frec err_note days_of base_of email_of
   local -i i k tl tr
@@ -293,6 +294,7 @@ _branches_plan() {
     if [[ -z "$rec" ]]; then _br_plan_unlisted "$rp" "$b" "${err_note[$rp]:--}"; continue; fi
     f=("${(@ps:\t:)rec}")
     lsha="${f[6]}" rsha="${f[7]}" owner="${f[9]}" why="${f[10]}" cls="${f[11]}" ahead="${f[13]}" note="${f[17]}"
+    pr_open=-; [[ "${f[16]}" == (open|draft) ]] && pr_open="${f[15]}"
     if [[ "$cls" != (safe|force) ]]; then
       target=local+origin
       [[ "$rsha" == - ]] && target=local
@@ -309,10 +311,11 @@ _branches_plan() {
       *) unfetched="origin was not fetched" ;;
     esac
     if [[ "$rsha" != - && "$owner" == me ]]; then
-      if [[ -n "$unfetched" ]]; then _br_plan_add skip "$rp" "$b" origin - "$rsha" "$unfetched"
+      if [[ "$pr_open" != - ]]; then _br_plan_add skip "$rp" "$b" origin - "$rsha" "PR $pr_open is open"
+      elif [[ -n "$unfetched" ]]; then _br_plan_add skip "$rp" "$b" origin - "$rsha" "$unfetched"
       elif [[ "$base" == - ]]; then
         _br_plan_add skip "$rp" "$b" origin - "$rsha" "no base branch, so commits by others cannot be ruled out"
-      elif _branches_remote_all_mine "$rp" "$base" "$rsha" "${email_of[$rp]}"; then tr=1
+      elif _branches_remote_all_mine "$rp" "$base" "$rsha" "${email_of[$rp]}" "$b"; then tr=1
       else _br_plan_add skip "$rp" "$b" origin - "$rsha" "has commits by others"; fi
     fi
     # pushed means "origin keeps every commit", which only a fresh origin ref can say.

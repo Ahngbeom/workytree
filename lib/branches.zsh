@@ -9,7 +9,8 @@
 #    4 repo_path                               13 base_ahead largest among the sides to delete
 #    5 branch      name without origin/        14 key        ticket key of a backup name,
 #    6 local_sha   full sha                                  proven or not
-#    7 remote_sha  full sha                    15 pr_ref     PR whose head is this name
+#    7 remote_sha  full sha                    15 pr_ref     PR whose head is this name: an
+#                                                            open one, else the latest
 #    8 gone        1 when the local upstream   16 pr_state
 #                  is gone, else 0             17 note       why, in words; error: git's
 #    9 owner       me|teammate|- (no origin)                 first line
@@ -146,10 +147,14 @@ status_collect_branches() {
   local user_email
   user_email="$(git -C "$repo_path" config user.email 2>/dev/null)"
 
-  local -A pr_ref pr_state pr_sha
-  local b r s u h
+  local -A pr_ref pr_state pr_sha pr_open
+  local b r s u h src
   if [[ -n $pr_file && -r $pr_file ]]; then
     while IFS=$'\t' read -r b r s u h; do pr_ref[$b]=$r pr_state[$b]=$s pr_sha[$b]=$h; done < "$pr_file"
+    src=$pr_file; [[ -r $pr_file.all ]] && src=$pr_file.all
+    while IFS=$'\t' read -r b r s u; do
+      [[ $s == (open|draft) && -z ${pr_open[$b]:-} ]] && pr_open[$b]=$r$'\t'$s
+    done < "$src"
   fi
 
   # Maps are keyed by full refname: %(refname:short) turns into heads/x when a tag x exists.
@@ -179,8 +184,8 @@ status_collect_branches() {
     done
   fi
 
-  local lref rref lsha rsha lwhy rwhy why cls owner key bk_state bk_refs note count ts del_ahead n
-  local -i gone protected backup_ok merged pushed via_pr side_age stale_age
+  local lref rref lsha rsha lwhy rwhy why cls owner why_owner key bk_state bk_refs note count ts del_ahead n
+  local -i gone protected backup_ok merged pushed via_pr side_age stale_age rdel demoted
   local -a out del_refs
   for name in ${(k)names}; do
     [[ $name == "$base_name" ]] && continue
@@ -188,7 +193,16 @@ status_collect_branches() {
     lref=refs/heads/$name rref=refs/remotes/origin/$name
     lsha=${r_sha[$lref]:--} rsha=${r_sha[$rref]:--}
     gone=0; [[ $lsha != - && ${r_track[$lref]} == gone ]] && gone=1
-    owner=-; [[ $rsha != - ]] && { branch_owner "${r_email[$rref]}" "$user_email"; owner=$REPLY; }
+    owner=- demoted=0
+    if [[ $rsha != - ]]; then
+      branch_owner "${r_email[$rref]}" "$user_email"; owner=$REPLY
+      # A tip inside the base can be the base commit the name was cut from, by anyone.
+      if [[ $owner == me ]] && (( ${+in_base[$rref]} )) && [[ ${r_up[$lref]:-} != "$rref" ]]; then
+        owner=teammate demoted=1
+      fi
+    fi
+    rdel=0; [[ $owner == me && -z ${pr_open[$name]:-} ]] && rdel=1
+    why_owner=$owner; [[ $owner == me ]] && (( ! rdel )) && why_owner=teammate
     protected=0; branch_protected "$name" && protected=1
     key=- bk_state=- bk_refs=-
     if branch_backup_name "$name" && branch_ticket_key "$name"; then
@@ -205,20 +219,20 @@ status_collect_branches() {
       status_merged_rule $(( ${+in_base[$ref]} )) "${pr_state[$name]:-}" "${pr_sha[$name]:-}" "${r_sha[$ref]}" && merged=1
       side_age=$(( now - ${r_ts[$ref]} ))
       if [[ $ref == "$lref" ]]; then
-        [[ $owner == teammate ]] \
+        [[ $rsha != - ]] && (( ! rdel )) \
           && branch_pushed "$name" "$lsha" "$rsha" "${r_up[$lref]}" "${r_track[$lref]}" && pushed=1
         branch_side_why $protected $merged $pushed $backup_ok $gone $side_age $stale_s; lwhy=$REPLY
         del_refs+=($ref)
       else
         branch_side_why $protected $merged 0 $backup_ok 0 $side_age $stale_s; rwhy=$REPLY
-        [[ $owner == me ]] && del_refs+=($ref)
+        (( rdel )) && del_refs+=($ref)
       fi
-      if [[ $owner == me || $ref == "$lref" ]]; then
+      if (( rdel )) || [[ $ref == "$lref" ]]; then
         (( merged && ! ${+in_base[$ref]} )) && via_pr=1
         [[ $REPLY == stale ]] && (( stale_age < 0 || side_age < stale_age )) && stale_age=$side_age
       fi
     done
-    branch_row_why $lwhy $rwhy $owner; why=$REPLY
+    branch_row_why $lwhy $rwhy $why_owner; why=$REPLY
     branch_why_class $why; cls=$REPLY
 
     ts=${r_ts[$lref]:-0}
@@ -235,7 +249,10 @@ status_collect_branches() {
     count="commits not in $base_show"; [[ $del_ahead != - ]] && count="$del_ahead $count"
     case $why in
       protected) note=protected ;;
-      read-only) note="origin branch by ${r_email[$rref]//[<>]/}" ;;
+      read-only)
+        if [[ $owner == me ]]; then note="PR ${${pr_open[$name]}%%$'\t'*} is open"
+        elif (( demoted )); then note="no commits beyond $base_show, not tracked locally"
+        else note="origin branch by ${r_email[$rref]//[<>]/}"; fi ;;
       merged) if (( via_pr )); then note="PR ${pr_ref[$name]} merged"; else note="merged into $base_show"; fi ;;
       pushed) note="same as origin/$name" ;;
       backup) note="backup of $key (PR $bk_refs merged)" ;;
@@ -254,8 +271,10 @@ status_collect_branches() {
         esac
         ;;
     esac
+    r=${pr_ref[$name]:--} s=${pr_state[$name]:--}
+    [[ -n ${pr_open[$name]:-} ]] && { r=${pr_open[$name]%%$'\t'*} s=${pr_open[$name]#*$'\t'}; }
     f=(branch "$project" "$repo" "$repo_path" "$name" "$lsha" "$rsha" $gone "$owner" "$why" "$cls"
-       "$ts" "$del_ahead" "$key" "${pr_ref[$name]:--}" "${pr_state[$name]:--}" "${note//$'\t'/ }")
+       "$ts" "$del_ahead" "$key" "$r" "$s" "${note//$'\t'/ }")
     out+=("${(l:12::0:)ts}"$'\t'"${(pj:\t:)f}")
   done
   for line in "${(@on)out}"; do print -r -- "${line#*$'\t'}"; done

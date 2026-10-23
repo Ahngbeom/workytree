@@ -90,6 +90,72 @@ test_own_remote_does_not_make_the_local_copy_pushed() {
   assert_eq "$(bf fix/o 17)" "1 commits not in origin/main" note
 }
 
+# mate_branch <name>: <name> pushed by a teammate's clone at origin/main, with no commits of
+# its own, so its tip is main's tip, authored by t@t.
+mate_branch() {
+  git clone -q -b main "$HOME/remote.git" "$HOME/mate"
+  git -C "$HOME/mate" push -q origin "main:refs/heads/$1"
+  git -C "$A" fetch -q origin
+}
+
+test_branch_without_own_commits_is_not_mine_by_the_base_tip() {
+  app_with_origin
+  mate_branch feature/new
+  collect
+  assert_eq "$(bf feature/new 9)" teammate owner
+  assert_eq "$(bf feature/new 10)" read-only why
+  assert_eq "$(bf feature/new 11)" none class
+  assert_eq "$(bf feature/new 17)" "no commits beyond origin/main, not tracked locally" note
+  git -C "$A" branch -q --no-track feature/new origin/feature/new
+  collect
+  assert_eq "$(bf feature/new 9)" teammate untracked-local-owner
+  assert_eq "$(bf feature/new 13)" 0 local-side-only
+}
+
+test_own_branch_without_commits_tracked_locally_is_mine() {
+  app_with_origin
+  git -C "$A" switch -q -c feature/z; git -C "$A" push -q -u origin feature/z
+  git -C "$A" switch -q main
+  collect
+  assert_eq "$(bf feature/z 9)" me owner
+  assert_eq "$(bf feature/z 10)" merged why
+  assert_eq "$(bf feature/z 11)" safe class
+}
+
+test_open_pr_keeps_the_origin_side() {
+  app_with_origin
+  git -C "$A" switch -q -c fix/p; commit; git -C "$A" push -q -u origin fix/p
+  git -C "$A" switch -q main
+  git -C "$A" merge -q --no-ff fix/p -m merge; git -C "$A" push -q origin main
+  printf 'fix/p\t!9\topen\tu\t%s\n' "$(git -C "$A" rev-parse fix/p)" > "$HOME/prs"
+  collect "$HOME/prs"
+  assert_eq "$(bf fix/p 9)" me owner
+  assert_eq "$(bf fix/p 10)" merged local-why
+  assert_eq "$(bf fix/p 15)" '!9' pr-ref
+  assert_eq "$(bf fix/p 16)" open pr-state
+  git -C "$A" switch -q -c fix/q; commit; git -C "$A" push -q -u origin fix/q
+  git -C "$A" switch -q main; git -C "$A" branch -q -D fix/q
+  printf 'fix/q\t!8\tdraft\tu\t%s\n' "$(git -C "$A" rev-parse origin/fix/q)" > "$HOME/prs"
+  collect "$HOME/prs"
+  assert_eq "$(bf fix/q 9)" me origin-only-owner
+  assert_eq "$(bf fix/q 10)" read-only origin-only-why
+  assert_eq "$(bf fix/q 11)" none origin-only-class
+  assert_eq "$(bf fix/q 17)" "PR !8 is open" origin-only-note
+}
+
+test_open_pr_hidden_behind_a_newer_one_still_keeps_origin() {
+  app_with_origin
+  git -C "$A" switch -q -c fix/p; commit; git -C "$A" push -q -u origin fix/p
+  git -C "$A" switch -q main; git -C "$A" branch -q -D fix/p
+  local sha; sha="$(git -C "$A" rev-parse origin/fix/p)"
+  printf 'fix/p\t!2\tmerged\tu\t%s\n' "$sha" > "$HOME/prs"
+  printf 'fix/p\t!1\topen\tu\t%s\t2026-01-01\nfix/p\t!2\tmerged\tu\t%s\t2026-02-01\n' "$sha" "$sha" > "$HOME/prs.all"
+  collect "$HOME/prs"
+  assert_eq "$(bf fix/p 10)" read-only why
+  assert_eq "$(bf fix/p 15)" '!1' open-pr-shown
+  assert_eq "$(bf fix/p 17)" "PR !1 is open" note
+}
+
 test_squash_merged_branch_is_merged_by_its_pr() {
   app_with_origin
   git -C "$A" switch -q -c fix/s; commit; git -C "$A" push -q -u origin fix/s
