@@ -64,14 +64,15 @@ status_merged_rule() { (( $1 )) || [[ "$2" == merged && -n "$3" && "$3" == "$4" 
 
 # branch_verdict <repo_path> <branch>: REPLY = merged (status_merged_rule), pushed (every commit
 # is on its remote upstream) or unmerged; WT_VERDICT_BASE = the base as shown (origin/main),
-# WT_VERDICT_PR = the merged PR (#N) when only the forge shows the merge, WT_VERDICT_GONE = 0|1.
-typeset -g WT_VERDICT_BASE='' WT_VERDICT_PR=''
+# WT_VERDICT_PR = the merged PR (#N) when only the forge shows the merge, WT_VERDICT_GONE = 0|1,
+# WT_VERDICT_PR_SHA = the head sha of the branch's merged PR, if the forge was asked.
+typeset -g WT_VERDICT_BASE='' WT_VERDICT_PR='' WT_VERDICT_PR_SHA=''
 typeset -gi WT_VERDICT_GONE=0
 branch_verdict() {
   local repo_path="$1" br="$2" base tip up line
   local -i in_base=0
   local -a pr
-  WT_VERDICT_BASE='' WT_VERDICT_PR='' WT_VERDICT_GONE=0 REPLY=unmerged
+  WT_VERDICT_BASE='' WT_VERDICT_PR='' WT_VERDICT_PR_SHA='' WT_VERDICT_GONE=0 REPLY=unmerged
   tip="$(git -C "$repo_path" rev-parse -q --verify "refs/heads/$br^{commit}")" || return 1
   if base="$(status_base_ref "$repo_path")"; then
     WT_VERDICT_BASE="${${base#refs/remotes/}#refs/heads/}"
@@ -81,6 +82,7 @@ branch_verdict() {
     for line in ${(f)"$(forge_pr_rows "$repo_path" 2>/dev/null)"}; do
       [[ "${line%%$'\t'*}" == "$br" ]] && { pr=("${(@ps:\t:)line}"); break; }
     done
+    [[ "${pr[3]:-}" == merged ]] && WT_VERDICT_PR_SHA="${pr[5]:-}"
   fi
   if status_merged_rule $in_base "${pr[3]:-}" "${pr[5]:-}" "$tip"; then
     (( in_base )) || WT_VERDICT_PR="${pr[2]}"

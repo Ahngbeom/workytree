@@ -41,19 +41,31 @@ _wt_remote_branch() {
   return 1
 }
 
-# remove_remote_branch <repo_path> <remote> <remote_branch>: REPLY = the short sha the
-# tracking ref pointed at before the delete.
+# remove_remote_branch <repo_path> <remote> <remote_branch> <sha>: deletes the remote branch only
+# while it still points at <sha>. REPLY = <sha>, shortened.
 remove_remote_branch() {
-  local repo_path="$1" remote="$2" rbranch="$3" out
-  REPLY="$(git -C "$repo_path" rev-parse --short "refs/remotes/$remote/$rbranch" 2>/dev/null)"
-  if out="$(git -C "$repo_path" push "$remote" --delete "$rbranch" 2>&1)"; then
+  local repo_path="$1" remote="$2" rbranch="$3" sha="$4" out
+  REPLY="$(git -C "$repo_path" rev-parse --short "$sha" 2>/dev/null)"
+  if out="$(git -C "$repo_path" push --force-with-lease="refs/heads/${rbranch}:${sha}" "$remote" --delete "$rbranch" 2>&1)"; then
     success "deleted remote branch $remote/$rbranch (was $REPLY)"
     hint "restore it with: git -C $repo_path push $remote ${REPLY}:refs/heads/$rbranch"
     return 0
   fi
   warn "failed to delete remote branch: $remote/$rbranch. git said:"; _wt_indent_and_cap "$out" >&2
-  hint "if it is already gone upstream, drop the stale ref: git -C $repo_path fetch --prune $remote"
-  hint "otherwise check network, credentials and branch protection, then retry: git -C $repo_path push $remote --delete $rbranch"
+  hint "if it moved or is already gone upstream, refresh the ref and look again: git -C $repo_path fetch --prune $remote"
+  hint "otherwise check network, credentials and branch protection, then retry: git -C $repo_path push --force-with-lease=refs/heads/${rbranch}:${REPLY} $remote --delete $rbranch"
+  return 1
+}
+
+# _rm_remote_covered <repo_path> <sha> <ref|''> <base ref|''> <merged PR sha|''>: rc 0 when every
+# commit of the remote branch at <sha> is in <ref> or the base, or a PR was merged at <sha>.
+_rm_remote_covered() {
+  local repo_path="$1" sha="$2" ref
+  [[ -n "$sha" ]] || return 1
+  [[ "$5" == "$sha" ]] && return 0
+  for ref in "$3" "$4"; do
+    [[ -n "$ref" ]] && git -C "$repo_path" merge-base --is-ancestor "$sha" "$ref" 2>/dev/null && return 0
+  done
   return 1
 }
 
@@ -169,7 +181,7 @@ cmd_remove() {
   local -i out_fd
   exec {out_fd}>&1 1>&2
   local -a pos
-  local -i force_remove=0 delete_branch=0 force_branch=0 delete_remote=0 saw_dashdash=0 to_given=0
+  local -i force_remove=0 delete_branch=0 force_branch=0 branch_force_given=0 delete_remote=0 saw_dashdash=0 to_given=0
   local arg dest=""
   while (( $# )); do
     arg="$1"; shift
@@ -178,7 +190,7 @@ cmd_remove() {
       --)                 saw_dashdash=1 ;;
       --force)            force_remove=1 ;;
       --branch|-b)        delete_branch=1 ;;
-      --branch-force|-B)  delete_branch=1; force_branch=1 ;;
+      --branch-force|-B)  delete_branch=1; force_branch=1; branch_force_given=1 ;;
       --remote|-r)        delete_remote=1 ;;
       --to)               (( $# )) || usage_error "--to requires a directory"; dest="$1"; to_given=1; shift ;;
       --to=*)             dest="${arg#--to=}"; to_given=1 ;;
@@ -277,14 +289,22 @@ cmd_remove() {
     warn "worktree only has IDE state under .idea/ — discarding it:"; print -r -- "$WT_DIRT_DETAIL" | sed 's/^/  /'
   fi
 
-  local remote="" rbranch=""
+  local remote="" rbranch="" rsha=""
   if [[ -n "$branch" ]] && (( interactive || delete_remote || (delete_branch && ! force_branch) )); then
     wt_fetch_origin "$repo_path"
-    _wt_remote_branch "$repo_path" "$branch" && { remote="${reply[1]}" rbranch="${reply[2]}"; }
+    if _wt_remote_branch "$repo_path" "$branch"; then
+      remote="${reply[1]}" rbranch="${reply[2]}"
+      rsha="$(git -C "$repo_path" rev-parse -q --verify "refs/remotes/$remote/$rbranch")"
+    fi
   fi
-  local verdict="" base_name="" label=""
+  if (( delete_remote )) && [[ -z "$remote" ]]; then
+    warn "no remote branch known for '$ticket_branch'; skipping remote delete"
+    hint "if it exists upstream, refresh tracking refs first: git -C $repo_path fetch --all"
+    delete_remote=0
+  fi
+  local verdict="" base_name="" label="" pr_head=""
   if [[ -n "$branch" ]] && (( interactive || (delete_branch && ! force_branch) )); then
-    branch_verdict "$repo_path" "$branch"; verdict="$REPLY"
+    branch_verdict "$repo_path" "$branch"; verdict="$REPLY" pr_head="$WT_VERDICT_PR_SHA"
     base_name="${WT_VERDICT_BASE:-the base branch}"
     case "$verdict" in
       merged) label="merged into $base_name"; [[ -n "$WT_VERDICT_PR" ]] && label="PR $WT_VERDICT_PR merged" ;;
@@ -325,10 +345,20 @@ cmd_remove() {
       branch_row="fail"$'\t'"local branch   kept          $branch (not merged into $base_name; use -B)"
     fi
   fi
-  if (( delete_remote )) && [[ -z "$remote" ]]; then
-    warn "no remote branch known for '$ticket_branch'; skipping remote delete"
-    hint "if it exists upstream, refresh tracking refs first: git -C $repo_path fetch --all"
-    delete_remote=0
+  local remote_row="" rbase="" rbase_name="" tip_ref=""
+  if (( delete_remote && ! branch_force_given )); then
+    rbase="$(status_base_ref "$repo_path")"; rbase_name="${${${rbase#refs/remotes/}#refs/heads/}:-the base branch}"
+    (( ! delete_branch || verified || force_branch )) && tip_ref="refs/heads/$branch"
+    if ! _rm_remote_covered "$repo_path" "$rsha" "$tip_ref" "$rbase" "$pr_head"; then
+      if (( interactive )); then
+        prompt_confirm "'$remote/$rbranch' has commits that are not in $branch or $rbase_name — delete it anyway and lose them?" n || delete_remote=0
+      else
+        warn "keeping remote branch $remote/$rbranch: it has commits that are not in $branch or $rbase_name"
+        hint "to delete it anyway, and lose them: git -C $repo_path push $remote --delete $rbranch (or pass -B)"
+        delete_remote=0
+      fi
+      (( delete_remote )) || remote_row="fail"$'\t'"remote branch  kept          $remote/$rbranch (has commits not in $branch or $rbase_name; use -B)"
+    fi
   fi
   (( interactive && WT_CAN_CD && ! to_given )) && { _rm_pick_destination "$target" "$repo_path"; dest="$REPLY"; }
   [[ -z "$dest" ]] && _rm_is_inside "$PWD" "$target" && dest="$repo_path"
@@ -377,8 +407,10 @@ cmd_remove() {
   fi
   if (( delete_remote )); then
     ui_progress $(( ++step )) $total "deleting remote branch $remote/$rbranch"
-    if remove_remote_branch "$repo_path" "$remote" "$rbranch"; then results+=("ok"$'\t'"remote branch  deleted       $remote/$rbranch (was $REPLY)")
+    if remove_remote_branch "$repo_path" "$remote" "$rbranch" "$rsha"; then results+=("ok"$'\t'"remote branch  deleted       $remote/$rbranch (was $REPLY)")
     else results+=("fail"$'\t'"remote branch  not deleted   $remote/$rbranch"); fi
+  elif [[ -n "$remote_row" ]]; then
+    results+=("$remote_row")
   elif [[ -n "$remote" ]]; then
     results+=("skip"$'\t'"remote branch  kept          $remote/$rbranch")
   fi
