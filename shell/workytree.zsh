@@ -153,22 +153,6 @@ workytree() {
   return 0
 }
 
-# _workytree_alias_enabled: should `wt()` be installed? R8: this must NOT parse the config
-# file itself — lib/config.zsh is the single owner of that format, so duplicating its
-# grammar here (comments, quoting, section scoping) would just be a second, divergent
-# parser waiting to disagree with the first. Ask the CLI instead; a non-zero exit (key
-# unset, or no config file at all) means "default enabled", same as bin/workytree's own
-# `alias_wt` default.
-_workytree_alias_enabled() {
-  [[ "${WORKYTREE_ALIAS:-1}" == 0 ]] && return 1
-  local val
-  val="$("$WORKYTREE_BIN" config get alias_wt 2>/dev/null)" || return 0
-  case "${val:l}" in
-    false|0|no) return 1 ;;
-    *) return 0 ;;
-  esac
-}
-
 # R35: this file must NOT contain a literal `wt() { ... }` anywhere, even inside a branch
 # that will not run. zsh parses an entire if/else block at PARSE time, before deciding which
 # branch executes -- so if the caller already has `wt` defined as an ALIAS, the parser sees
@@ -202,30 +186,29 @@ _workytree_wt_is_ours() {
   return $(( ! is_ours ))
 }
 
-# Resolved once, here, rather than on every `create`: answering it costs a CLI invocation
-# (it has to read the config, including every [project]'s own ai_session), and the wrapper
-# needs the answer before it decides whether to create the runfile. Fails closed -- a
-# non-zero exit, including a config that will not parse, leaves the channel unarmed.
 typeset -gi _WORKYTREE_AI_CONFIGURED=0
-"$WORKYTREE_BIN" __ai-configured 2>/dev/null && _WORKYTREE_AI_CONFIGURED=1
-
-if _workytree_alias_enabled; then
-  if (( $+functions[wt] )); then
-    if _workytree_wt_is_ours; then
-      # Double-sourced (R36), or a fresh shell that happens to already have an identical
-      # `wt` -- either way this is ours, so reassert it silently rather than warn.
-      functions[wt]="$_WORKYTREE_WT_BODY"
-    else
-      print -u2 "workytree: 'wt' is already defined; not installing the alias (set 'alias_wt = false' to silence)"
+() {
+  local init alias_msg="workytree: 'wt' is already defined; not installing the alias (set 'alias_wt = false' or WORKYTREE_ALIAS=0 to silence)"
+  local -i want_alias=1 cfg_err=0
+  if [[ -o interactive ]]; then
+    init=" $("$WORKYTREE_BIN" __shell-init 2>/dev/null) "
+    [[ "$init" == *" ai=1 "* ]] && _WORKYTREE_AI_CONFIGURED=1
+    [[ "$init" == *" alias=0 "* ]] && want_alias=0
+    if [[ "$init" == *" config=error "* ]]; then
+      cfg_err=1
+      print -u2 -r -- "workytree: config has errors; run 'workytree list' to see them"
     fi
-  elif (( $+commands[wt] || $+aliases[wt] )); then
-    print -u2 "workytree: 'wt' is already defined; not installing the alias (set 'alias_wt = false' to silence)"
+  fi
+  [[ "${WORKYTREE_ALIAS:-1}" == 0 ]] && want_alias=0
+  (( want_alias )) || return 0
+  if (( $+functions[wt] )) && _workytree_wt_is_ours; then
+    functions[wt]="$_WORKYTREE_WT_BODY"
+  elif (( $+functions[wt] || $+commands[wt] || $+aliases[wt] )); then
+    (( cfg_err )) || print -u2 -r -- "$alias_msg"
   else
-    # Nothing defined at all -- including the case where `wt` was ours but got removed
-    # entirely (e.g. `unfunction wt`); there's nothing foreign here to protect.
     functions[wt]="$_WORKYTREE_WT_BODY"
   fi
-fi
+}
 
 _workytree_register_completion() {
   (( $+functions[compdef] )) || return 0

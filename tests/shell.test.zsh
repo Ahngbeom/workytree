@@ -460,4 +460,36 @@ test_create_on_a_terminal_cds_and_announces_once() {
   assert_eq "${#cd_lines}" 1 "one cd: line"
 }
 
+# counting_install: a copy of the integration whose bin/workytree appends its first argument to
+# $HOME/cli.calls before running the real CLI. $HOME/.zshenv sources it, as a user who moved
+# the source line out of .zshrc would.
+counting_install() {
+  mkdir -p "$HOME/inst/shell" "$HOME/inst/bin"
+  cp "$SHELL_FILE" "$HOME/inst/shell/workytree.zsh"
+  print -r -- "#!/bin/sh
+echo \"\$1\" >> '$HOME/cli.calls'
+exec '$WT_BIN' \"\$@\"" > "$HOME/inst/bin/workytree"
+  chmod +x "$HOME/inst/bin/workytree"
+  print -r -- "source '$HOME/inst/shell/workytree.zsh'" > "$HOME/.zshenv"
+}
+
+test_sourcing_runs_the_cli_once_in_interactive_shells_and_never_otherwise() {
+  fixture; counting_install
+  assert_eq "$(ZDOTDIR="$HOME" zsh -d -c 'whence -w wt' 2>&1)" "wt: function" "non-interactive still gets wt"
+  assert_not_exists "$HOME/cli.calls"
+  ZDOTDIR="$HOME" zsh -d -i -c true >/dev/null 2>&1
+  assert_eq "$(<"$HOME/cli.calls")" "__shell-init"
+  assert_eq "$(WORKYTREE_ALIAS=0 ZDOTDIR="$HOME" zsh -d -c 'whence -w wt' 2>&1)" "wt: none"
+}
+
+test_broken_config_at_startup_prints_one_line_and_no_alias_advice() {
+  write_config <<'EOF'
+kinds = a
+kinds = b
+EOF
+  print -r -- "alias wt='echo mine'; source '$SHELL_FILE'" > "$HOME/.zshrc"
+  assert_eq "$(ZDOTDIR="$HOME" zsh -d -i -c wt 2>&1)" \
+    "workytree: config has errors; run 'workytree list' to see them"$'\n'"mine"
+}
+
 run_tests
