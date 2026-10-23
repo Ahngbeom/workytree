@@ -213,7 +213,7 @@ wt create --ai fix PROJ-1        # 이번 한 번만
 wt config set ai_session always  # 매번
 ```
 
-에이전트는 현재 셸에서, 새 워크트리 안에서, 포그라운드로 실행된다. 에이전트를 끝내면 그 워크트리에 그대로 남는다. 터미널에서 `wt`를 실행하고 stdin도 터미널일 때만 동작한다. 출력을 `$(...)`·파이프·파일로 돌리거나, 스크립트나 `bin/workytree`로 실행하면 워크트리만 만들고 이유를 stderr에 한 줄로 알려 준다([비대화 실행](#비대화-실행)).
+에이전트는 현재 셸에서, 새 워크트리 안에서, 포그라운드로 실행된다. 에이전트를 끝내면 그 워크트리에 그대로 남는다. 터미널에서 `wt`를 실행하고 stdin도 터미널일 때만 동작한다. 출력을 `$(...)`·파이프·파일로 돌리거나, 스크립트나 `bin/workytree`로 실행하면 워크트리만 만든다. 이유는 `--ai`를 줬거나 stdin이 터미널일 때만 stderr에 한 줄로 알려 준다([비대화 실행](#비대화-실행)).
 
 | 키 | 범위 | 뜻 |
 |---|---|---|
@@ -273,7 +273,7 @@ teammate_mode   = auto,tmux,iterm2,in-process
 | `create` | 이 repo를 쓸지 | 첫 위치 인자 | 추론한 repo 사용 | 추론한 repo 사용 | `test_create_uses_the_inferred_repo_without_asking` |
 | `create` | project, repo, kind, ticket | `--project`, 위치 인자 | 종료 코드 2 | 종료 코드 2 | `test_create_missing_arguments_name_the_reason` |
 | `create` | base, `Create?` | 네 번째 위치 인자 | 자동 감지한 base로 생성 | 자동 감지한 base로 생성 | `test_create_takes_the_base_default_and_confirms_with_yes` |
-| `create` | AI 세션 확인(`ask`), 옵션 메뉴 | `--ai`, `--no-ai` | 묻지 않고 실행 | 실행 안 함, 이유 한 줄 | `test_ai_session_runs_with_yes_and_is_skipped_without_a_terminal` |
+| `create` | AI 세션 확인(`ask`), 옵션 메뉴 | `--ai`, `--no-ai` | 묻지 않고 실행 | 실행 안 함. 이유 한 줄은 `--ai`를 줬거나 stdin이 터미널일 때만 | `test_ai_session_runs_with_yes_and_is_skipped_without_a_terminal` |
 | `remove` | 어떤 워크트리를 지울지 | `repo kind ticket` | 종료 코드 2 | 종료 코드 2 | `test_remove_missing_arguments_name_the_reason` |
 | `remove` | 변경을 버릴지 | `--force` | 거부, 종료 코드 1 | 거부, 종료 코드 1 | `test_remove_refuses_a_dirty_worktree_without_force` |
 | `remove` | 브랜치를 지울지, `Proceed?` | `-b`, `-B`, `-r` | 브랜치를 남기고 진행 | 브랜치를 남기고 진행 | `test_remove_keeps_branches_without_flags` |
@@ -287,9 +287,9 @@ teammate_mode   = auto,tmux,iterm2,in-process
 
 ### 셸 통합의 모드
 
-`wt`(셸 함수)는 실행될 때마다 아래 모드 하나를 정한다. 모드는 안내 줄, 질문, fzf, AI 세션만 정한다. **cd는 대화형 셸이면 모든 모드에서 한다**: `( wt cd x && make ) > log`의 `make`는 `x`에서 실행된다.
+`wt`(셸 함수)는 실행될 때마다 아래 모드 하나를 정한다. 모드는 안내 줄, 이동할 곳 질문, status 목록, AI 세션만 정한다. **cd는 대화형 셸이면 모든 모드에서 한다**: `( wt cd x && make ) > log`의 `make`는 `x`에서 실행된다.
 
-| 모드 | 언제 | 출력 | 이동할 곳 질문 | fzf | AI 세션 |
+| 모드 | 언제 | 출력 | 이동할 곳 질문 | status 목록(fzf) | AI 세션 |
 |---|---|---|---|---|---|
 | terminal | 대화형 셸, stdout이 터미널 | `cd: <경로>` | 함 | 씀 | stdin도 터미널이면 실행 |
 | redirected | 대화형 셸 최상위에서 stdout을 파일로 보냄(`wt cd x > /dev/null`) | 경로만 | 함 | 안 씀 | 실행 안 함 |
@@ -304,9 +304,9 @@ teammate_mode   = auto,tmux,iterm2,in-process
 
 ### 출력 규약
 
-- `create`, `cd`, `remove`는 stdout 마지막 줄에 경로를 출력함. `create`가 그 앞에 출력하는 줄(`source repo:` 등)은 바뀔 수 있으므로 스크립트에서 읽지 않음
+- `create`, `cd`는 stdout 마지막 줄이 경로. `remove`는 이동할 곳이 있을 때만(지운 워크트리 안에서 실행했거나 `--to`를 줬을 때). `create`가 그 앞에 출력하는 줄(`source repo:` 등)은 바뀔 수 있으므로 스크립트에서 읽지 않음
 - 경고, 오류, 힌트, 진행 표시는 stderr, 질문은 `/dev/tty`
-- `cd`는 없는 워크트리면 종료 코드 1. 경로 계산만 하려면 `path`(항상 종료 코드 0)
+- `cd`는 없는 워크트리면 종료 코드 1. 경로 계산만 하려면 `path`(대상이 없어도 종료 코드 0)
 - 원격 git 호출(fetch, 원격 브랜치 삭제)은 자격 증명을 묻지 않음(`GIT_TERMINAL_PROMPT=0`). SSH 설정은 건드리지 않음
 
 에이전트와 스크립트에서는 `wt` 대신 `command workytree`를 쓴다. 셸 함수가 없는 환경이나 셸 스냅숏(Claude Code의 Bash 도구 등)에서도 똑같이 동작한다.
