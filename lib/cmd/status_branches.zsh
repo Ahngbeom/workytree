@@ -238,7 +238,7 @@ _br_plan_unlisted() {
 # (after fetching origin where a remote or pushed row needs it). BR_REPO_NAME maps repo_path
 # to the repo name. Of each line only project, repo, repo_path, branch, owner and why are read.
 _branches_plan() {
-  local file="$1" line rp b key tmp prs days l base email rec lsha rsha owner why cls note ahead target
+  local file="$1" line rp b key tmp prs days l base email rec lsha rsha owner why cls note ahead target unfetched
   local -a f order marked_rp marked_b
   local -A project seen need_fetch fetched frec err_note days_of base_of email_of
   local -i i k tl tr
@@ -265,7 +265,9 @@ _branches_plan() {
   for rp in "${order[@]}"; do
     (( ++i ))
     fetched[$rp]=none
-    if (( ${+need_fetch[$rp]} )); then
+    # wt_fetch_origin succeeds without an origin, which would vouch for leftover origin refs.
+    if ! git -C "$rp" remote get-url origin >/dev/null 2>&1; then fetched[$rp]=noremote
+    elif (( ${+need_fetch[$rp]} )); then
       if wt_fetch_origin "$rp"; then fetched[$rp]=ok; else fetched[$rp]=failed; fi
     fi
     prs=''
@@ -298,26 +300,34 @@ _branches_plan() {
       _br_plan_add skip "$rp" "$b" "$target" "$lsha" "$rsha" "$note"
       continue
     fi
-    tl=0 tr=0
+    tl=0 tr=0 base="${base_of[$rp]}"
     [[ "$lsha" != - ]] && tl=1
+    case "${fetched[$rp]}" in
+      ok) unfetched='' ;;
+      failed) unfetched="could not fetch origin" ;;
+      noremote) unfetched="no origin remote" ;;
+      *) unfetched="origin was not fetched" ;;
+    esac
     if [[ "$rsha" != - && "$owner" == me ]]; then
-      case "${fetched[$rp]}" in
-        failed) _br_plan_add skip "$rp" "$b" origin - "$rsha" "could not fetch origin" ;;
-        none) _br_plan_add skip "$rp" "$b" origin - "$rsha" "origin was not fetched" ;;
-        *)
-          if _branches_remote_all_mine "$rp" "${base_of[$rp]}" "$rsha" "${email_of[$rp]}"; then tr=1
-          else _br_plan_add skip "$rp" "$b" origin - "$rsha" "has commits by others"; fi ;;
-      esac
+      if [[ -n "$unfetched" ]]; then _br_plan_add skip "$rp" "$b" origin - "$rsha" "$unfetched"
+      elif [[ "$base" == - ]]; then
+        _br_plan_add skip "$rp" "$b" origin - "$rsha" "no base branch, so commits by others cannot be ruled out"
+      elif _branches_remote_all_mine "$rp" "$base" "$rsha" "${email_of[$rp]}"; then tr=1
+      else _br_plan_add skip "$rp" "$b" origin - "$rsha" "has commits by others"; fi
     fi
     # pushed means "origin keeps every commit", which only a fresh origin ref can say.
-    if [[ "$why" == pushed && "${fetched[$rp]}" != ok ]]; then
-      cls=force note="origin not fetched, so not proven: $note"
+    if [[ "$why" == pushed && -n "$unfetched" ]]; then
+      cls=force note="$unfetched, so not proven: $note"
     fi
-    # The record's base_ahead also counted the origin side this plan no longer deletes.
+    # The record's base_ahead and note also counted the origin side this plan no longer deletes.
     if (( tl && ! tr )) && [[ "$rsha" != - && "$owner" == me ]]; then
       ahead=-
-      if [[ "${base_of[$rp]}" != - ]]; then
-        ahead="$(git -C "$rp" rev-list --count "$lsha" --not "${base_of[$rp]}" -- 2>/dev/null)" || ahead=-
+      if [[ "$base" != - ]]; then
+        ahead="$(git -C "$rp" rev-list --count "$lsha" --not "$base" -- 2>/dev/null)" || ahead=-
+      fi
+      if [[ "$cls" == force ]]; then
+        if [[ "$ahead" == <-> ]]; then note="local only, $ahead commits not in ${${base#refs/remotes/}#refs/heads/}"
+        else note="local only, an unknown number of commits not in the base"; fi
       fi
     fi
     if (( tl && tr )); then target=local+origin
@@ -331,9 +341,17 @@ _branches_plan() {
   return 0
 }
 
+# _br_plan_sha <local_sha> <remote_sha>: REPLY = the short sha, local7/remote7 when they differ.
+_br_plan_sha() {
+  if [[ "$1" != - && "$2" != - && "$1" != "$2" ]]; then REPLY="${1[1,7]}/${2[1,7]}"
+  elif [[ "$1" != - ]]; then REPLY="${1[1,7]}"
+  elif [[ "$2" != - ]]; then REPLY="${2[1,7]}"
+  else REPLY=-; fi
+}
+
 # _branches_print_plan: BR_PLAN as the three groups, on stderr.
 _branches_print_plan() {
-  local e c head sha
+  local e c head
   local -a f
   local -i w1=4 w2=6 w3=6 w4=7 n
   for e in "${BR_PLAN[@]}"; do
@@ -341,6 +359,7 @@ _branches_print_plan() {
     (( ${#BR_REPO_NAME[${f[2]}]} > w1 )) && w1=${#BR_REPO_NAME[${f[2]}]}
     (( ${#f[3]} > w2 )) && w2=${#f[3]}
     (( ${#f[4]} > w3 )) && w3=${#f[4]}
+    _br_plan_sha "${f[5]}" "${f[6]}"; (( ${#REPLY} > w4 )) && w4=${#REPLY}
   done
   for c in safe force skip; do
     case "$c" in
@@ -354,11 +373,8 @@ _branches_print_plan() {
       f=("${(@ps:\t:)e}")
       [[ "${f[1]}" == "$c" ]] || continue
       (( ++n ))
-      if [[ "${f[5]}" != - && "${f[6]}" != - && "${f[5]}" != "${f[6]}" ]]; then sha="${f[5][1,7]}/${f[6][1,7]}"
-      elif [[ "${f[5]}" != - ]]; then sha="${f[5][1,7]}"
-      elif [[ "${f[6]}" != - ]]; then sha="${f[6][1,7]}"
-      else sha=-; fi
-      print -u2 -r -- "  ${(r:w1:)BR_REPO_NAME[${f[2]}]}  ${(r:w2:)f[3]}  ${(r:w3:)f[4]}  ${(r:w4:)sha}  ${f[7]}"
+      _br_plan_sha "${f[5]}" "${f[6]}"
+      print -u2 -r -- "  ${(r:w1:)BR_REPO_NAME[${f[2]}]}  ${(r:w2:)f[3]}  ${(r:w3:)f[4]}  ${(r:w4:)REPLY}  ${f[7]}"
     done
     (( n )) || print -u2 -r -- "  (none)"
   done

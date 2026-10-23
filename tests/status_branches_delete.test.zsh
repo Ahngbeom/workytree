@@ -68,14 +68,28 @@ mark() {
   done
 }
 
-# delete_marked [answer...]: _branches_delete on ~/marked in a subshell (prompt fds and
-# exit 130 stay there); BR_PLAN to ~/plan, BR_APPROVED to ~/approved, stderr to ~/err.
+# delete_marked [--eof | answer...]: _branches_delete on ~/marked in a subshell (prompt fds
+# and exit 130 stay there); BR_PLAN to ~/plan, BR_APPROVED to ~/approved, stderr to ~/err,
+# rc to ~/rc. --eof gives an empty answers file.
 delete_marked() {
-  printf '%s\n' "$@" > "$HOME/answers"
+  if [[ "${1:-}" == --eof ]]; then : > "$HOME/answers"; else printf '%s\n' "$@" > "$HOME/answers"; fi
+  rm -f "$HOME/plan" "$HOME/approved"
   ( export WORKYTREE_PROMPT_INPUT="$HOME/answers"
     _branches_delete "$HOME/marked"
     print -rl -- "${BR_PLAN[@]}" > "$HOME/plan"
     print -rl -- "${BR_APPROVED[@]}" > "$HOME/approved" ) < /dev/null 2> "$HOME/err"
+  print -r -- $? > "$HOME/rc"
+}
+
+# forge_marked <field=value...>: rewrite those record fields of every line in ~/marked.
+forge_marked() {
+  local line kv; local -a f out
+  for line in "${(@f)$(<"$HOME/marked")}"; do
+    f=("${(@ps:\t:)line}")
+    for kv in "$@"; do f[${kv%%=*}]="${kv#*=}"; done
+    out+=("${(pj:\t:)f}")
+  done
+  print -rl -- "${out[@]}" > "$HOME/marked"
 }
 
 # plan_has <class> <branch> <target>: the BR_PLAN element, else MISSING.
@@ -208,6 +222,87 @@ test_force_question_counts_only_the_sides_still_deleted() {
   assert_contains "$(<"$HOME/marked")" $'\t2\t' "the record counts origin's 2"
   delete_marked n
   assert_contains "$(<"$HOME/err")" "force-delete fix/mix (local) and lose 1 commits?"
+  assert_contains "$(group force)" "local only, 1 commits not in origin/main" "plan line agrees"
+  assert_contains "$(plan_has force fix/mix local)" $'\tlocal only, 1 commits not in origin/main'
+}
+
+# Reviewer's setup: default branch trunk, no origin/HEAD, detached main checkout, so
+# status_base_ref finds no base and base..sha cannot be listed.
+test_no_base_never_targets_origin() {
+  mkdir -p "$A"; git -C "$A" init -q -b trunk; commit init
+  git init -q --bare "$HOME/remote.git"
+  git -C "$A" remote add origin "$HOME/remote.git"
+  git -C "$A" push -q -u origin trunk
+  git -C "$A" config user.email t@t
+  git -C "$A" switch -q -c fix/x; teammate_commit; commit; git -C "$A" push -q -u origin fix/x
+  git -C "$A" switch -q trunk; git -C "$A" checkout -q --detach
+  status_base_ref "$A" >/dev/null; assert_eq $? 1 "no base"
+  mark fix/x
+  assert_contains "$(<"$HOME/marked")" $'\tme\t' "origin side owned by me"
+  delete_marked y y
+  assert_contains "$(plan_has skip fix/x origin)" "no base branch, so commits by others cannot be ruled out"
+  assert_eq "$(plan_has force fix/x origin)" MISSING no-origin-target
+  assert_eq "$(plan_has force fix/x local+origin)" MISSING no-both-target
+  assert_eq "$(grep -c $'\torigin\t\\|\tlocal+origin\t' "$HOME/approved")" 0 "no origin approved"
+}
+
+test_plan_line_shows_both_shas_when_tips_differ() {
+  app_with_origin
+  git -C "$A" switch -q -c fix/d; commit; git -C "$A" push -q -u origin fix/d; commit
+  git -C "$A" switch -q main
+  mark fix/d
+  delete_marked n
+  local l r; l="$(git -C "$A" rev-parse fix/d)" r="$(git -C "$A" rev-parse origin/fix/d)"
+  assert_contains "$(group force)" "local+origin  ${l[1,7]}/${r[1,7]}  " both-shas
+}
+
+test_leftover_origin_refs_without_a_remote_are_not_trusted() {
+  app_with_origin
+  merged_branch fix/m
+  teammate_remote fix/t
+  git -C "$A" branch -q --no-track fix/t origin/fix/t
+  local -A keep; local r
+  for r in main fix/m fix/t; do keep[$r]="$(git -C "$A" rev-parse "origin/$r")"; done
+  git -C "$A" remote remove origin
+  for r in main fix/m fix/t; do git -C "$A" update-ref "refs/remotes/origin/$r" "${keep[$r]}"; done
+  mark fix/m fix/t
+  assert_contains "$(<"$HOME/marked")" $'\tpushed\tsafe\t' "fix/t was pushed"
+  wt_fetch_origin() { print -r -- "$1" >> "$HOME/fetches"; return 0; }
+  delete_marked n n
+  assert_not_exists "$HOME/fetches"
+  assert_contains "$(plan_has skip fix/m origin)" "no origin remote"
+  assert_eq "${$(plan_has safe fix/m local)%%$'\t'*}" safe "local side still planned"
+  assert_contains "$(plan_has force fix/t local)" "no origin remote, so not proven"
+}
+
+test_eof_or_empty_answers_approve_nothing() {
+  app_with_origin
+  merged_branch fix/m; stale_branch fix/old
+  mark fix/m fix/old
+  delete_marked "" ""
+  assert_eq "$(<"$HOME/rc")" 0 empty-answers-rc
+  assert_eq "$(<"$HOME/approved")" "" empty-answers-approve-nothing
+  delete_marked --eof
+  assert_eq "$(<"$HOME/rc")" 130 eof-rc
+  assert_not_exists "$HOME/approved"
+  assert_contains "$(git -C "$A" branch --list fix/m)" fix/m
+  assert_contains "$(git -C "$A" branch --list fix/old)" fix/old
+}
+
+test_forged_owner_cannot_add_an_origin_target() {
+  app_with_origin
+  teammate_remote fix/t
+  git -C "$A" branch -q --no-track fix/t origin/fix/t
+  mark fix/t
+  forge_marked 9=me 10=merged 11=safe
+  delete_marked y
+  assert_eq "$(plan_has safe fix/t origin)" MISSING no-origin
+  assert_eq "$(plan_has safe fix/t local+origin)" MISSING no-both
+  local -a approved; approved=("${(@f)$(<"$HOME/approved")}")
+  assert_eq "${#approved}" 1 one-approved
+  local -a f; f=("${(@ps:\t:)approved[1]}")
+  assert_eq "${f[4]}" local local-target
+  assert_eq "${f[6]}" - no-remote-sha
 }
 
 test_remote_all_mine() {
