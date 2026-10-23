@@ -241,7 +241,7 @@ _br_plan_unlisted() {
 # (after fetching origin where a remote or pushed row needs it). BR_REPO_NAME maps repo_path
 # to the repo name. Of each line only project, repo, repo_path, branch, owner and why are read.
 _branches_plan() {
-  local file="$1" line rp b key tmp prs days l base email rec lsha rsha owner why cls note ahead target unfetched pr_open
+  local file="$1" line rp b key tmp prs days l base email rec lsha rsha owner why cls note ahead target unfetched pr_open bs count
   local -a f order marked_rp marked_b
   local -A project seen need_fetch fetched frec err_note days_of base_of email_of
   local -i i k tl tr
@@ -334,6 +334,12 @@ _branches_plan() {
         if [[ "$ahead" == <-> ]]; then note="local only, $ahead commits not in ${${base#refs/remotes/}#refs/heads/}"
         else note="local only, an unknown number of commits not in the base"; fi
       fi
+    fi
+    if (( tl && tr )) && [[ "$cls" == force && "$base" != - && "$lsha" != "$rsha" ]]; then
+      bs="${${base#refs/remotes/}#refs/heads/}"; count="commits not in $bs"
+      [[ "$ahead" == <-> ]] && count="$ahead $count"
+      ahead="$(git -C "$rp" rev-list --count "$lsha" "$rsha" --not "$base" -- 2>/dev/null)" || ahead=-
+      [[ "$ahead" == <-> && "$note" == *"$count" ]] && note="${note%"$count"}$ahead commits not in $bs"
     fi
     if (( tl && tr )); then target=local+origin
     elif (( tl )); then target=local

@@ -261,6 +261,18 @@ test_no_base_never_targets_origin() {
   assert_eq "$(grep -c $'\torigin\t\\|\tlocal+origin\t' "$HOME/approved")" 0 "no origin approved"
 }
 
+test_force_question_counts_the_union_of_diverged_sides() {
+  app_with_origin
+  git -C "$A" switch -q -c fix/dv; commit a; git -C "$A" push -q -u origin fix/dv
+  git -C "$A" reset -q --hard main; commit b
+  git -C "$A" switch -q main
+  mark fix/dv
+  assert_contains "$(<"$HOME/marked")" $'\t1\t' "the record has the larger side's 1"
+  delete_marked n
+  assert_contains "$(<"$HOME/err")" "force-delete fix/dv (local+origin) and lose 2 commits?"
+  assert_contains "$(plan_has force fix/dv local+origin)" $'\t2 commits not in origin/main' plan-note
+}
+
 test_plan_line_shows_both_shas_when_tips_differ() {
   app_with_origin
   git -C "$A" switch -q -c fix/d; commit; git -C "$A" push -q -u origin fix/d; commit
