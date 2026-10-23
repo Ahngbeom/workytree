@@ -109,7 +109,8 @@ wt create fix PROJ-1               # repo 안에서: repo 확인 후 생성
 wt create server fix PROJ-1        # repo 지정
 wt create server fix PROJ-1 origin/develop -y
 wt create --ai fix PROJ-1          # 생성하고 이동한 뒤 AI 세션 실행
-wt cd server fix PROJ-1
+wt create --no-ai fix PROJ-1       # 이번에는 AI 세션을 열지 않음
+wt cd server fix PROJ-1            # 없는 워크트리면 오류(종료 코드 1)
 wt list [repo] · wt repos · wt path [repo [kind [ticket]]]
 wt status [repo] [--fetch|--offline] [--stale [days]] [--json] [--plain]
 wt remove                          # 대화형: 워크트리 선택 → 브랜치 → 이동할 곳 → 확인
@@ -121,7 +122,7 @@ wt repo add <path> [--name n] [--project p]
 wt config get|set|edit|path
 ```
 
-`--project`, `--yes`/`-y`, `--no-color`는 전역 옵션이라 명령줄 어디에 써도 된다.
+`--project`, `--yes`/`-y`, `--no-color`는 전역 옵션이라 명령줄 어디에 써도 된다. 스크립트·CI·에이전트에서의 동작은 [비대화 실행](#비대화-실행)에 있다.
 
 ## 워크트리 만들기
 
@@ -143,7 +144,7 @@ wt config get|set|edit|path
 - 워크트리가 없는 로컬 브랜치
 - `worktree_root` 아래에 있지만 git이 모르는 디렉터리
 
-fzf 0.38 이상이 있고 양쪽이 터미널이면 상세 창이 있는 fzf 목록을 연다. `--plain`, fzf 없음·구버전, 출력 파이프 중 하나라도 해당하면 표로 출력하고, `--json`은 같은 데이터를 스크립트용으로 출력한다. 보기만 할 뿐 정리·fetch(`--fetch` 제외)·삭제는 하지 않는다.
+fzf 0.38 이상이 있고 양쪽이 터미널이면 상세 창이 있는 fzf 목록을 연다. `--plain`, `-y`, fzf 없음·구버전, 출력 파이프·리다이렉트 중 하나라도 해당하면 표로 출력하고, `--json`은 같은 데이터를 스크립트용으로 출력한다. 보기만 할 뿐 정리·fetch(`--fetch` 제외)·삭제는 하지 않는다.
 
 | 표시 | 뜻 |
 |---|---|
@@ -190,9 +191,10 @@ wt config set project.work.stale_days 60     # 한 프로젝트
 
 단계마다 진행 표시줄이 나오고, 실패하면 `hint:` 줄로 해결 방법을 알려 주며, 마지막 요약에 지운 것·남긴 것·실패한 것을 정리한다.
 
-- `-y`를 주거나 터미널이 없으면 묻지 않고 옵션대로 처리한다: `-b`/`-B` 로컬 브랜치, `-r` 원격 브랜치, `--to <dir>` 이동할 곳
+- `-y`를 주거나 터미널이 없으면 묻지 않고 옵션대로 처리한다: `-b`/`-B` 로컬 브랜치, `-r` 원격 브랜치, `--to <dir>` 이동할 곳. 플래그가 없으면 브랜치는 남긴다
 - 지금 있는 워크트리를 지우면 `--to`가 없는 한 원본 repo로 이동
-- 브랜치 삭제가 실패해도 종료 코드는 유지. 그 시점에 워크트리는 이미 지워진 상태
+- 브랜치 삭제가 실패해도 종료 코드는 0이고 요약에 ✗ 행으로 남는다. 그 시점에 워크트리는 이미 지워진 상태
+- 원격 브랜치 삭제는 자격 증명을 묻지 않는다. 자격 증명이 없으면 ✗ 행과 힌트로 끝난다
 
 > **주의**: gitignore된 파일(`.env`, `node_modules` 등)은 변경으로 치지 않으므로 경고 없이 함께 지워진다. [알려진 제약](#알려진-제약)을 참고한다.
 
@@ -211,7 +213,7 @@ wt create --ai fix PROJ-1        # 이번 한 번만
 wt config set ai_session always  # 매번
 ```
 
-에이전트는 현재 셸에서, 새 워크트리 안에서, 포그라운드로 실행된다. 에이전트를 끝내면 그 워크트리에 그대로 남는다. 셸 통합(`wt`, 또는 이 저장소가 설치하는 `workytree` 함수)으로 실행할 때만 동작한다. `bin/workytree`를 직접 부르면 워크트리는 만들지만 에이전트는 실행하지 않고, AI 세션이 켜져 있으면 그 이유를 경고로 알려 준다.
+에이전트는 현재 셸에서, 새 워크트리 안에서, 포그라운드로 실행된다. 에이전트를 끝내면 그 워크트리에 그대로 남는다. 터미널에서 `wt`를 실행하고 stdin도 터미널일 때만 동작한다. 출력을 `$(...)`·파이프·파일로 돌리거나, 스크립트나 `bin/workytree`로 실행하면 워크트리만 만들고 이유를 stderr에 한 줄로 알려 준다([비대화 실행](#비대화-실행)).
 
 | 키 | 범위 | 뜻 |
 |---|---|---|
@@ -237,7 +239,9 @@ teammate_mode   = auto,tmux,iterm2,in-process
 - `(skip)`을 고르면 그 플래그 없이 실행
 - 위 블록이 `claude`의 내장 프로필. 직접 쓴 `[agent claude]`는 합쳐지지 않고 **통째로 대체**하므로 목록을 줄일 수도 있음
 - 프로필이 없는 에이전트(`ai_agent = aider` 등)는 옵션 메뉴 없음. `ask`면 "open a $name session here?"만 묻고, `always`나 `--ai`면 바로 실행
-- `-y`/`--yes`: 질문 없이 `command`만 실행
+- `-y`/`--yes`: `ask`여도 확인과 옵션 메뉴 없이 `command`만 실행
+- `--no-ai`: 이번 실행에서는 세션을 열지 않음. `always`와 `--ai`보다 우선
+- `ask`인데 물을 터미널이 없고 `-y`도 없으면 실행하지 않음
 - 질문을 취소(`q`)해도 워크트리는 남고 종료 코드 0. 세션을 열지 않은 것은 `create` 실패로 치지 않음
 
 ## 대화형 프롬프트
@@ -252,6 +256,69 @@ teammate_mode   = auto,tmux,iterm2,in-process
 
 - 직접 값을 입력할 수 있는 목록(`kind`, 에이전트 옵션)은 마지막 줄 `(type a value…)`를 고르면 한 줄 입력으로 전환
 - 취소하면 종료 코드 130. 단, AI 세션 질문은 워크트리를 만든 뒤라 취소해도 0
+
+## 비대화 실행
+
+스크립트, CI, AI 에이전트에서 실행해도 workytree는 키 입력을 기다리지 않는다. `-y`를 주거나 물을 터미널이 없으면(stdin이 터미널이 아니거나 `/dev/tty`를 열 수 없으면) 질문 대신 아래 표대로 동작한다.
+
+`-y`/`--yes`는 "묻지 말고 진행"이다.
+
+- 질문, fzf 목록, 편집기 모두 열지 않음
+- 파괴적인 일은 플래그로만 함: 로컬 브랜치 삭제 `-b`/`-B`, 원격 브랜치 삭제 `-r`, 변경 버리기 `--force`
+- 필요한 값이 빠지면 종료 코드 2. 메시지 끝의 `(not asking: --yes)` 또는 `(not asking: no terminal)`이 이유
+- AI 세션은 파괴적이지 않으므로 `ai_session = ask`여도 확인 없이 실행. 이번 실행만 끄려면 `--no-ai`
+
+| 명령 | 질문 | 대신 쓰는 인자·플래그 | `-y` | 터미널 없음 | 테스트 |
+|---|---|---|---|---|---|
+| `create` | 이 repo를 쓸지 | 첫 위치 인자 | 추론한 repo 사용 | 추론한 repo 사용 | `test_create_uses_the_inferred_repo_without_asking` |
+| `create` | project, repo, kind, ticket | `--project`, 위치 인자 | 종료 코드 2 | 종료 코드 2 | `test_create_missing_arguments_name_the_reason` |
+| `create` | base, `Create?` | 네 번째 위치 인자 | 자동 감지한 base로 생성 | 자동 감지한 base로 생성 | `test_create_takes_the_base_default_and_confirms_with_yes` |
+| `create` | AI 세션 확인(`ask`), 옵션 메뉴 | `--ai`, `--no-ai` | 묻지 않고 실행 | 실행 안 함, 이유 한 줄 | `test_ai_session_runs_with_yes_and_is_skipped_without_a_terminal` |
+| `remove` | 어떤 워크트리를 지울지 | `repo kind ticket` | 종료 코드 2 | 종료 코드 2 | `test_remove_missing_arguments_name_the_reason` |
+| `remove` | 변경을 버릴지 | `--force` | 거부, 종료 코드 1 | 거부, 종료 코드 1 | `test_remove_refuses_a_dirty_worktree_without_force` |
+| `remove` | 브랜치를 지울지, `Proceed?` | `-b`, `-B`, `-r` | 브랜치를 남기고 진행 | 브랜치를 남기고 진행 | `test_remove_keeps_branches_without_flags` |
+| `remove` | 지운 뒤 어디로 갈지 | `--to <dir>` | 지운 워크트리 안이었으면 원본 repo | 같음 | `test_remove_from_inside_without_an_owning_shell_warns` |
+| `init` | 설정 마법사 | `name repo_root worktree_root` | 종료 코드 2 | 종료 코드 2 | `test_init_missing_arguments_name_the_reason` |
+| `status` | fzf 목록 | `--plain`, `--json` | 표 출력 | 표 출력 | `test_status_prints_the_table_with_yes_or_without_a_terminal` |
+| `config edit` | 편집기 | `config get`, `config set` | 종료 코드 2 | 종료 코드 2 | `test_config_edit_refuses_with_yes_or_without_a_terminal` |
+| git 원격 호출 | 자격 증명 | 없음 | 묻지 않고 실패(✗ 행) | 묻지 않고 실패(✗ 행) | `test_remote_git_never_prompts_for_credentials` |
+
+테스트 이름은 `tests/noninteractive.test.zsh`에 있다. 표와 테스트가 어긋나면 `test_readme_matrix_names_every_test_in_this_file`이 실패한다.
+
+### 셸 통합의 모드
+
+`wt`(셸 함수)는 실행될 때마다 아래 모드 하나를 정한다. 모드는 안내 줄, 질문, fzf, AI 세션만 정한다. **cd는 대화형 셸이면 모든 모드에서 한다**: `( wt cd x && make ) > log`의 `make`는 `x`에서 실행된다.
+
+| 모드 | 언제 | 출력 | 이동할 곳 질문 | fzf | AI 세션 |
+|---|---|---|---|---|---|
+| terminal | 대화형 셸, stdout이 터미널 | `cd: <경로>` | 함 | 씀 | stdin도 터미널이면 실행 |
+| redirected | 대화형 셸 최상위에서 stdout을 파일로 보냄(`wt cd x > /dev/null`) | 경로만 | 함 | 안 씀 | 실행 안 함 |
+| captured | `$(...)`, 파이프, 출력을 돌린 서브셸 | 경로만 | 안 함 | 안 씀 | 실행 안 함 |
+| script | 래퍼를 source한 비대화형 셸 | CLI 출력 그대로, cd 안 함 | 안 함 | 안 씀 | 실행 안 함 |
+| 직접 실행 | `bin/workytree`, `command workytree` | CLI 출력 그대로, cd 안 함 | 안 함 | stdout이 터미널이면 씀 | 실행 안 함 |
+
+- `cd:` 줄의 색은 `NO_COLOR`, `--no-color`, `TERM=dumb` 중 하나라도 있으면 빠짐
+- captured, script, 직접 실행에서 `remove`가 지금 있는 워크트리를 지우면 셸은 지워진 디렉터리에 남음. stderr에 경고 한 줄과 `cd <경로>` 힌트가 나오고, stdout 마지막 줄은 그 경로
+- AI 세션을 건너뛴 이유는 `--ai`를 줬거나, 세션이 켜져 있고 stdin이 터미널일 때 stderr에 한 줄로 나옴. CI와 에이전트 하네스에서는 나오지 않음
+- 실행 중 Ctrl-C로 끊었을 때 셸의 현재 디렉터리가 지워졌으면 남아 있는 가장 가까운 상위 디렉터리로 옮기고 한 줄로 알림
+
+### 출력 규약
+
+- `create`, `cd`, `remove`는 stdout 마지막 줄에 경로를 출력함. `create`가 그 앞에 출력하는 줄(`source repo:` 등)은 바뀔 수 있으므로 스크립트에서 읽지 않음
+- 경고, 오류, 힌트, 진행 표시는 stderr, 질문은 `/dev/tty`
+- `cd`는 없는 워크트리면 종료 코드 1. 경로 계산만 하려면 `path`(항상 종료 코드 0)
+- 원격 git 호출(fetch, 원격 브랜치 삭제)은 자격 증명을 묻지 않음(`GIT_TERMINAL_PROMPT=0`). SSH 설정은 건드리지 않음
+
+에이전트와 스크립트에서는 `wt` 대신 `command workytree`를 쓴다. 셸 함수가 없는 환경이나 셸 스냅숏(Claude Code의 Bash 도구 등)에서도 똑같이 동작한다.
+
+| 환경 변수 | 뜻 |
+|---|---|
+| `WORKYTREE_CONFIG` | 설정 파일 경로 |
+| `XDG_CONFIG_HOME` | 기본 설정 위치(`$XDG_CONFIG_HOME/workytree/config`) |
+| `NO_COLOR` | 색 끄기, `--no-color`와 같음 |
+| `VISUAL`, `EDITOR` | `config edit`가 여는 편집기 |
+| `WORKYTREE_ALIAS=0` | `wt` 함수를 만들지 않음 |
+| `WORKYTREE_BIN` | 셸 함수가 실행할 CLI. 기본값은 설치 위치이고, 실행할 수 없으면 `PATH`의 `workytree` |
 
 ## 설정
 
@@ -280,10 +347,12 @@ wt config set project.work.worktree_root ~/work/worktrees
 | 코드 | 뜻 |
 |---|---|
 | 0 | 성공 |
-| 1 | 일반 오류: 잘못된 인자 값(모르는 repo·프로젝트, `-B` 없이 병합 안 된 브랜치 등), 또는 유효한 설정이 이미 있어 `init`이 거부함 |
-| 2 | 사용법 오류: 인자 개수가 틀림, 모르는 플래그 |
+| 1 | 일반 오류: 잘못된 인자 값(모르는 repo·프로젝트 등), 없는 워크트리로 `cd`, `--force` 없이 변경이 있는 워크트리를 `remove -y`, 또는 유효한 설정이 이미 있어 `init`이 거부함 |
+| 2 | 사용법 오류: 인자 개수가 틀림, 모르는 플래그, 형식이 틀린 이름·키(`project add 'bad name'`, `config set a.b c`), 빈 값, `-y`나 터미널 없음 때문에 물을 수 없는 필수 값, 터미널 없는 `config edit` |
 | 3 | 설정 **파일 상태** 문제: 설정 파일 없음, 파싱 실패(중복 섹션·키, 읽을 수 없는 줄), 읽을 수 없거나 일반 파일이 아님, `[project]`에 `repo_root`·`worktree_root` 누락, `repo_root`·`worktree_root`가 상대 경로·`/`·`$HOME`의 상위 디렉터리, 설정 디렉터리에 쓸 수 없음 |
 | 130 | 대화형 질문 취소 (`q`, Esc, Ctrl-C, EOF). AI 세션 질문 취소는 제외 |
+
+`remove`에서 브랜치 삭제가 실패해도(병합 안 된 브랜치를 `-b`로 지우려 한 경우 등) 종료 코드는 0이다. 워크트리는 이미 지워졌고, 실패는 요약의 ✗ 행으로 남는다.
 
 `resolve_repo`의 "unsafe repo name" 거부와 `prune`의 여러 repo 일괄 실패는 3이 더 어울리지만 1로 끝난다. 알고 있는 어긋남이며 이번에는 고치지 않는다.
 
@@ -304,6 +373,8 @@ wt config set project.work.worktree_root ~/work/worktrees
 | `teammate_mode`는 문서화되지 않은 `claude` 플래그에 기댐 | 깨지면 자기 `[agent claude]`의 `ask`에서 `teammate_mode`를 뺌 |
 | `[agent]`의 `command`는 셸 명령줄처럼 토큰으로 나뉨 | 아래 상세 참고 |
 | AI 세션을 켜는 설정은 다음 셸부터 적용됨 | 새 셸을 열거나 `--ai` 사용 |
+| `bin/workytree` 첫 줄이 `#!/usr/bin/env -S zsh -f`라서 `env -S`가 필요함 | macOS와 GNU coreutils 8.30 이상에서 동작. 없는 환경(BusyBox 등)에서는 `zsh -f <설치 경로>/bin/workytree`로 실행 |
+| `bin/workytree`는 `~/.zshenv`를 읽지 않음 | `PATH`, `GH_TOKEN` 같은 값은 export해 두어야 CLI에 닿음 |
 | AI 세션이 켜져 있으면 `post-checkout` hook이 실행 내용을 바꿀 수 있음 | 아래 상세 참고 |
 
 <details>
@@ -332,14 +403,14 @@ wt config set project.work.worktree_root ~/work/worktrees
 <details>
 <summary>AI 세션 설정이 다음 셸부터 적용되는 이유</summary>
 
-AI 세션을 켰는지는 셸 설정이 래퍼를 source할 때 한 번 확인한다. 이 확인에는 CLI 호출이 들어가고 `create` 전에 답이 필요하므로, 이미 실행 중인 셸은 시작할 때의 답을 유지한다. `workytree config set ai_session ask|always`는 실행할 때 이 사실을 알려 준다. `--ai`는 어느 셸에서든 바로 동작하고, **끄는** 설정은 CLI가 매번 `ai_session`을 다시 읽으므로 바로 적용된다. `alias_wt`와 같은 절충이다.
+AI 세션을 켰는지는 대화형 셸이 래퍼를 source할 때 한 번 확인한다. 이 확인에는 CLI 호출이 들어가고 `create` 전에 답이 필요하므로, 이미 실행 중인 셸은 시작할 때의 답을 유지한다. `workytree config set ai_session ask|always`는 실행할 때 이 사실을 알려 준다. `--ai`는 어느 셸에서든 바로 동작하고, **끄는** 설정은 CLI가 매번 `ai_session`을 다시 읽으므로 바로 적용된다. `alias_wt`와 같은 절충이다.
 
 </details>
 
 <details>
 <summary>AI 세션과 <code>post-checkout</code> hook</summary>
 
-래퍼는 `$TMPDIR` 아래에 `workytree-ai.XXXXXX` 임시 파일을 만들고, `cd` 뒤에 그 파일의 내용을 실행한다. 이 파일은 AI 세션을 켠 실행(`--ai`, 또는 설정 어딘가의 `ai_session = ask|always`)에서만 만든다. 기능을 켰다면 `git worktree add` 중에 도는 hook이 glob으로 이 파일을 찾아 자기 명령을 넣을 수 있다.
+래퍼는 `$TMPDIR` 아래에 `workytree-ai.XXXXXX` 임시 파일을 만들고, `cd` 뒤에 그 파일의 내용을 실행한다. 이 파일은 AI 세션을 켠 실행(`--ai`, 또는 설정 어딘가의 `ai_session = ask|always`)이 터미널에서 실행될 때만 만든다. 기능을 켰다면 `git worktree add` 중에 도는 hook이 glob으로 이 파일을 찾아 자기 명령을 넣을 수 있다.
 
 새로운 코드 실행 경로는 아니다. `post-checkout` hook은 기능과 상관없이 매 `create`마다 사용자 권한으로 임의 코드를 실행한다. 달라지는 것은 실행 맥락으로, 가로채는 하위 프로세스에서 곧 입력할 포그라운드 셸로 바뀐다. 경로나 파일 디스크립터를 숨겨도 막을 수 없다. Linux에서는 같은 사용자 프로세스가 `/proc/<pid>/environ`과 `/proc/<pid>/fd`로 다른 프로세스의 환경과 열린 파일에 접근할 수 있기 때문이다. 그래서 켠 실행에서만 이 경로가 생긴다는 점이 workytree가 실제로 보장할 수 있는 성질이다.
 

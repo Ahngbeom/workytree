@@ -184,4 +184,13 @@ test_remote_git_never_prompts_for_credentials() {
   assert_eq "$(<"$HOME/probe.log")" $'prompt=[0]\nprompt=[0]' "no terminal, then a terminal"
 }
 
+test_readme_matrix_names_every_test_in_this_file() {
+  local readme t
+  readme="$(<"$WT_TEST_ROOT/README.md")"
+  for t in ${(ok)functions[(I)test_*]}; do
+    [[ "$t" == "$0" ]] && continue
+    [[ "$readme" == *"| \`$t\` |"* ]]; assert_eq "$?" 0 "README row for $t"
+  done
+}
+
 run_tests

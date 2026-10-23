@@ -123,7 +123,10 @@ test_remove_with_branch_flags() {
   # unmerged branch: -b warns and keeps, -B deletes
   wt create app fix U main >/dev/null
   print y > "$HOME/wts/app/fix/U/f"; git -C "$HOME/wts/app/fix/U" add -A; git -C "$HOME/wts/app/fix/U" commit -qm c
-  assert_contains "$(wt remove app fix U -b 2>&1)" "not deleted"
+  local out rc
+  out="$(wt remove app fix U -b 2>&1)"; rc=$?
+  assert_contains "$out" "not deleted"
+  assert_eq "$rc" 0 "a branch -b could not delete is a ✗ row, not a failed remove"
   assert_contains "$(git -C "$HOME/src/app" branch)" "fix/U"
   wt create app fix U >/dev/null
   wt remove app fix U -B >/dev/null
