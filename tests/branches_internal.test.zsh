@@ -20,11 +20,17 @@ test_ticket_key_extraction() {
   done
 }
 
+test_ticket_key_skips_excluded_prefix_candidate() {
+  branch_ticket_key x/before-5/MPT-7; assert_eq "$REPLY" MPT-7
+}
+
 test_key_matching_respects_boundaries() {
   branch_name_has_key fix/mpt-9167 MPT-9167; assert_eq $? 0 case-insensitive
   branch_name_has_key fix/mpt-9167 mpt-916; assert_eq $? 1 prefix-is-not-a-match
   branch_name_has_key fix/xmpt-9167 mpt-9167; assert_eq $? 1 needs-left-boundary
   branch_name_has_key fix/mpt-9167_v2 mpt-9167; assert_eq $? 0 underscore-is-a-boundary
+  branch_name_has_key mpt-12 mpt-12; assert_eq $? 0 whole-name
+  branch_name_has_key fix/mpt-12-x mpt-12; assert_eq $? 0 hyphen-after
 }
 
 test_backup_and_protected_names() {
@@ -40,6 +46,8 @@ test_ticket_pr_state() {
   print -r -- $'fix/mpt-1\t!1\tmerged\tu\ts1\nfix/mpt-2\t!2\tmerged\tu\ts2\nfix/mpt-2-b\t!3\topen\tu\ts3' > "$HOME/prs"
   branch_ticket_pr mpt-1 "$HOME/prs"; assert_eq "$REPLY ${reply[1]}" "merged !1"
   branch_ticket_pr mpt-2 "$HOME/prs"; assert_eq "$REPLY ${reply[1]}" "open !3" open-pr-wins
+  print -r -- $'fix/mpt-4\t!4\tdraft\tu\ts4' >> "$HOME/prs"
+  branch_ticket_pr mpt-4 "$HOME/prs"; assert_eq "$REPLY ${reply[1]}" "open !4" draft-counts-as-open
   branch_ticket_pr mpt-3 "$HOME/prs"; assert_eq "$REPLY" none
   branch_ticket_pr mpt-1 "$HOME/missing"; assert_eq $? 1 lookup-skipped
 }
@@ -61,6 +69,8 @@ test_side_and_row_why() {
   branch_side_why 0 0 0 1 0 500 100; assert_eq "$REPLY" backup
   branch_side_why 0 0 0 0 1 10 100; assert_eq "$REPLY" gone
   branch_side_why 0 0 0 0 0 500 100; assert_eq "$REPLY" stale
+  branch_side_why 0 0 0 0 0 100 100; assert_eq "$REPLY" unmerged age-equal-to-threshold
+  branch_side_why 0 0 0 0 0 101 100; assert_eq "$REPLY" stale
   branch_side_why 0 0 0 0 0 - 100; assert_eq "$REPLY" unmerged
   branch_row_why merged stale me; assert_eq "$REPLY" stale riskier-side
   branch_row_why pushed unmerged teammate; assert_eq "$REPLY" pushed teammate-side-ignored

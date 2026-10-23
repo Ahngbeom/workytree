@@ -76,7 +76,7 @@ branch_side_why() {
   elif (( pushed )); then REPLY=pushed
   elif (( backup_ok )); then REPLY=backup
   elif (( gone )); then REPLY=gone
-  elif [[ $age == <-> && $stale == <-> ]] && (( age >= stale )); then REPLY=stale
+  elif [[ $age == <-> && $stale == <-> ]] && (( age > stale )); then REPLY=stale
   else REPLY=unmerged
   fi
 }
