@@ -84,7 +84,7 @@
 
 base에 없는 커밋이 하나도 없는 원격(tip이 base에 있음: base 커밋에서 갓 만든 브랜치, 머지된 브랜치)은 tip이 base 커밋일 수 있어 작성자가 소유를 말해 주지 않는다. GitLab에서는 머지 커밋 작성자가 머지 버튼을 누른 사람이라, 동료가 main에서 갓 만든 브랜치도 본인 것으로 보일 수 있다. 그래서 이런 원격은 `refs/heads/<b>`가 있고 그 upstream이 정확히 `refs/remotes/origin/<b>`이며 tip 작성자가 본인일 때만 `me`이고, 아니면 `teammate`다(목록은 이미 읽은 `for-each-ref` 결과로 판정하고, 계획은 같은 조건을 다시 확인한다). base를 찾지 못한 repo는 커밋을 가릴 수 없으므로 원격을 지우지 않는다.
 
-그 브랜치 이름을 head로 한 PR 중 `open`·`draft`가 하나라도 있으면 원격은 삭제 대상이 아니다. 목록에서 그 쪽은 WHY에 넣지 않고(원격만 있으면 `read-only`, 근거 `PR <ref> is open`), 계획은 `PR <ref> is open`으로 skipped에 둔다. 브랜치별 최신 PR이 아니라 조회한 PR 전부에서 찾는다.
+그 브랜치 이름을 head로 한 PR 중 `open`·`draft`가 하나라도 있으면 원격은 삭제 대상이 아니다. 목록에서 그 쪽은 WHY에 넣지 않고(원격만 있으면 `read-only`, 근거 `PR <ref> is open`), 계획은 `PR <ref> is open`으로 skipped에 둔다. 브랜치별 최신 PR이 아니라 조회한 PR 전부에서 찾는다. 전체 목록이 조회 한도를 채우면(`<prefix>.truncated`) 한도 밖의 오래된 열린 PR이 빠졌을 수 있으므로, `forge_pr_rows`가 열린 PR만 한 번 더 조회해 새 행을 `<prefix>.all`에 더한다. 그 조회도 한도를 채우거나 실패하면 `<prefix>.open-incomplete`를 남기고, 그때 본인 원격은 같은 방식으로 지우지 않는다(근거 `PR list incomplete, an open PR cannot be ruled out`).
 
 이메일 비교는 대소문자를 구분하지 않는다. `user.email`이 비어 있으면 모든 원격을 `teammate`로 본다.
 

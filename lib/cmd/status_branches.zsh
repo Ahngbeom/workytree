@@ -243,7 +243,7 @@ _br_plan_unlisted() {
 _branches_plan() {
   local file="$1" line rp b key tmp prs days l base email rec lsha rsha owner why cls note ahead target unfetched pr_open bs count
   local -a f order marked_rp marked_b
-  local -A project seen need_fetch fetched frec err_note days_of base_of email_of
+  local -A project seen need_fetch fetched frec err_note days_of base_of email_of open_unknown
   local -i i k tl tr
   BR_PLAN=() BR_PLAN_AHEAD=() BR_REPO_NAME=()
   [[ -r "$file" ]] || return 0
@@ -276,6 +276,7 @@ _branches_plan() {
     prs=''
     : > "$tmp/$i.err"
     if (( ! ST_OFFLINE )) && forge_pr_rows "$rp" "$tmp/$i.prs" > "$tmp/$i.prs" 2>> "$tmp/$i.err"; then prs="$tmp/$i.prs"; fi
+    [[ -e "$tmp/$i.prs.open-incomplete" ]] && open_unknown[$rp]=1
     (( ${+days_of[${project[$rp]}]} )) || days_of[${project[$rp]}]="$(status_stale_days "${project[$rp]}")"
     days="${days_of[${project[$rp]}]}"
     for line in ${(f)"$(status_collect_branches "${project[$rp]}" "${BR_REPO_NAME[$rp]}" "$rp" "$days" ${prs:+"$prs"} 2>> "$tmp/$i.err")"}; do
@@ -314,6 +315,8 @@ _branches_plan() {
     esac
     if [[ "$rsha" != - && "$owner" == me ]]; then
       if [[ "$pr_open" != - ]]; then _br_plan_add skip "$rp" "$b" origin - "$rsha" "PR $pr_open is open"
+      elif (( ${+open_unknown[$rp]} )); then
+        _br_plan_add skip "$rp" "$b" origin - "$rsha" "PR list incomplete, an open PR cannot be ruled out"
       elif [[ -n "$unfetched" ]]; then _br_plan_add skip "$rp" "$b" origin - "$rsha" "$unfetched"
       elif [[ "$base" == - ]]; then
         _br_plan_add skip "$rp" "$b" origin - "$rsha" "no base branch, so commits by others cannot be ruled out"

@@ -80,6 +80,50 @@ test_prefix_keeps_every_row_and_marks_a_full_page() {
   unstub
 }
 
+# A full page can hide older open PRs; they come from an open-only listing, else the gap is marked.
+test_full_page_lists_open_prs_separately() {
+  repo_with_origin https://github.com/o/r.git
+  gh() {
+    print -r -- "$*" >> "$HOME/gh.args"
+    local -i i
+    if [[ "$*" == *"--state open"* ]]; then
+      print -r -- $'old/A\t#1\topen\tu\ts1\tt'; print -r -- $'b2\t#2\topen\tu\ts\tt'; return
+    fi
+    for (( i = 2; i <= 201; i++ )); do print -r -- "b$i"$'\t#'"$i"$'\topen\tu\ts\tt'; done
+  }
+  forge_pr_rows "$HOME/r" "$HOME/p" >/dev/null
+  assert_contains "$(<"$HOME/gh.args")" "pr list -R github.com/o/r --state open --limit 200" open-query
+  assert_eq "$(grep -c $'^old/A\t#1\topen' "$HOME/p.all")" 1 old-open-added
+  assert_eq "$(grep -c $'^b2\t#2\t' "$HOME/p.all")" 1 no-duplicate
+  assert_exists "$HOME/p.truncated"
+  assert_not_exists "$HOME/p.open-incomplete"
+  gh() { local -i i; for (( i = 1; i <= 200; i++ )); do print -r -- "b$i"$'\t#'"$i"$'\topen\tu\ts\tt'; done; }
+  forge_pr_rows "$HOME/r" "$HOME/p" >/dev/null
+  assert_exists "$HOME/p.open-incomplete" open-page-full
+  gh() {
+    [[ "$*" == *"--state open"* ]] && return 4
+    local -i i; for (( i = 1; i <= 200; i++ )); do print -r -- "b$i"$'\t#'"$i"$'\tmerged\tu\ts\tt'; done
+  }
+  forge_pr_rows "$HOME/r" "$HOME/p" >/dev/null 2>&1
+  assert_exists "$HOME/p.open-incomplete" open-query-failed
+  gh() { print -r -- "$*" >> "$HOME/gh.small"; print -r -- $'fix/A\t#5\topen\tu\ts\tt'; }
+  forge_pr_rows "$HOME/r" "$HOME/p" >/dev/null
+  assert_eq "$(wc -l < "$HOME/gh.small" | tr -d ' ')" 1 one-query-when-not-full
+  assert_not_exists "$HOME/p.open-incomplete" not-full-clears-mark
+  unstub
+  git -C "$HOME/r" remote set-url origin git@gitlab.com:g/r.git
+  glab() {
+    print -r -- "$*" >> "$HOME/glab.args"
+    [[ "$*" == *--all* ]] || { print -r -- $'old/A\t!1\topen\tu\ts1\tt'; return; }
+    local -i i; for (( i = 2; i <= 101; i++ )); do print -r -- "b$i"$'\t!'"$i"$'\tmerged\tu\ts\tt'; done
+  }
+  forge_pr_rows "$HOME/r" "$HOME/p" >/dev/null
+  assert_contains "$(tail -1 "$HOME/glab.args")" "mr list -R git@gitlab.com:g/r.git --per-page 100" glab-open-query
+  assert_eq "$(grep -c $'^old/A\t!1\topen' "$HOME/p.all")" 1 glab-old-open-added
+  assert_not_exists "$HOME/p.open-incomplete" glab-open-complete
+  unstub
+}
+
 test_gitlab_passes_origin_url_to_glab() {
   repo_with_origin git@gitlab.com:g/s/r.git
   glab() { print -r -- "$*" > "$HOME/glab.args"; print -r -- $'fix/A\t!4\topen\thttps://x/4\tsha4\t2026-01-01T00:00:00.000Z'; }

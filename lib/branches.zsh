@@ -154,6 +154,8 @@ status_collect_branches() {
 
   local -A pr_ref pr_state pr_sha pr_open
   local b r s u h src
+  local -i open_unknown=0
+  [[ -n $pr_file && -e $pr_file.open-incomplete ]] && open_unknown=1
   if [[ -n $pr_file && -r $pr_file ]]; then
     while IFS=$'\t' read -r b r s u h; do pr_ref[$b]=$r pr_state[$b]=$s pr_sha[$b]=$h; done < "$pr_file"
     src=$pr_file; [[ -r $pr_file.all ]] && src=$pr_file.all
@@ -210,7 +212,7 @@ status_collect_branches() {
         owner=teammate demoted=1
       fi
     fi
-    rdel=0; [[ $owner == me && -z ${pr_open[$name]:-} ]] && rdel=1
+    rdel=0; [[ $owner == me && -z ${pr_open[$name]:-} ]] && (( ! open_unknown )) && rdel=1
     why_owner=$owner; [[ $owner == me ]] && (( ! rdel )) && why_owner=teammate
     protected=0; branch_protected "$name" && protected=1
     key=- bk_state=- bk_refs=-
@@ -264,7 +266,8 @@ status_collect_branches() {
     case $why in
       protected) note=protected ;;
       read-only)
-        if [[ $owner == me ]]; then note="PR ${${pr_open[$name]}%%$'\t'*} is open"
+        if [[ $owner == me && -n ${pr_open[$name]:-} ]]; then note="PR ${${pr_open[$name]}%%$'\t'*} is open"
+        elif [[ $owner == me ]]; then note="PR list incomplete, an open PR cannot be ruled out"
         elif (( demoted )); then note="no commits beyond $base_show, not tracked locally"
         else note="origin branch by ${r_email[$rref]//[<>]/}"; fi ;;
       merged) if (( via_pr )); then note="PR ${pr_ref[$name]} merged"; else note="merged into $base_show"; fi ;;

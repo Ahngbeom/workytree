@@ -200,7 +200,7 @@ fzf 0.38 이상이 있고 양쪽이 터미널이면 상세 창이 있는 fzf 목
 
 - 한 행은 그 브랜치의 로컬과 본인 원격을 함께 지운다. 원격은 tip 작성자가 그 repo의 `user.email`(대소문자 무시)이고 base에 없는 커밋도 모두 본인 것일 때만 지우고, 아니면 로컬만 지운다
 - base에 없는 커밋이 하나도 없는 원격(base 커밋에서 갓 만든 브랜치, 머지된 브랜치)은 tip이 base 안에 있어 작성자로 소유를 알 수 없다. 같은 이름의 로컬 브랜치가 `origin/<b>`를 upstream으로 추적하고 tip 작성자가 본인일 때만 본인 것으로 보고, 아니면 `teammate`로 보아 원격은 지우지 않는다. base를 찾지 못한 repo에서는 원격을 지우지 않는다
-- 그 브랜치를 head로 한 PR/MR이 열려 있거나 draft이면 원격은 지우지 않는다(계획에 `PR <ref> is open`으로 skipped)
+- 그 브랜치를 head로 한 PR/MR이 열려 있거나 draft이면 원격은 지우지 않는다(계획에 `PR <ref> is open`으로 skipped). PR 목록이 조회 한도를 채우면 열린 PR만 한 번 더 조회하고, 그 목록도 한도를 채우거나 조회가 실패하면 원격은 지우지 않는다(`PR list incomplete, an open PR cannot be ruled out`)
 - 로컬은 판정한 커밋을 가리킬 때 `git branch -D`로 지운다. squash 병합·백업 브랜치는 `-d`가 거부하기 때문이다
 - 지운 ref는 `~/.local/state/workytree/deleted.log`(`XDG_STATE_HOME`)에 시각·repo·ref·sha·복구 명령으로 남는다. 결과 화면이 사라져도 이 파일로 되살릴 수 있지만, 다른 ref에 없는 커밋은 git gc 유예(기본 2주)가 지나면 되살릴 수 없다
 - `--plain`, `-y`, 터미널 없음에서는 브랜치 모드도 표로만 출력하고 지우지 않는다

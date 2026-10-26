@@ -106,6 +106,7 @@ assert_exit() {
   assert_eq "$got" "$want" "exit code of: $*"
 }
 assert_dir() { if [[ -d "$1" ]]; then (( ++_pass )); else (( ++_fail )); print -u2 "  FAIL: dir missing $1"; print >> "$WT_FAIL_FILE" "FAIL: dir missing $1"; fi }
+assert_exists() { if [[ -e "$1" ]]; then (( ++_pass )); else (( ++_fail )); print -u2 "  FAIL: missing $1${2:+ ($2)}"; print >> "$WT_FAIL_FILE" "FAIL: missing $1${2:+ ($2)}"; fi }
 assert_not_exists() { if [[ ! -e "$1" ]]; then (( ++_pass )); else (( ++_fail )); print -u2 "  FAIL: exists $1"; print >> "$WT_FAIL_FILE" "FAIL: exists $1"; fi }
 
 run_tests() {

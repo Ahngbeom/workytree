@@ -156,6 +156,25 @@ test_open_pr_hidden_behind_a_newer_one_still_keeps_origin() {
   assert_eq "$(bf fix/p 17)" "PR !1 is open" note
 }
 
+test_open_prs_not_all_listed_keep_the_origin_side() {
+  app_with_origin
+  git -C "$A" switch -q -c fix/p; commit; git -C "$A" push -q -u origin fix/p
+  git -C "$A" switch -q main
+  git -C "$A" merge -q --no-ff fix/p -m merge; git -C "$A" push -q origin main
+  git -C "$A" switch -q -c fix/q
+  GIT_COMMITTER_DATE="@$(( EPOCHSECONDS - 100 * 86400 )) +0000" commit
+  git -C "$A" push -q -u origin fix/q
+  git -C "$A" switch -q main; git -C "$A" branch -q -D fix/q
+  : > "$HOME/prs"; : > "$HOME/prs.truncated"; : > "$HOME/prs.open-incomplete"
+  collect "$HOME/prs"
+  assert_eq "$(bf fix/p 9)" me owner
+  assert_eq "$(bf fix/p 10)" merged local-why
+  assert_eq "$(bf fix/p 11)" safe local-class
+  assert_eq "$(bf fix/q 10)" read-only origin-only-why
+  assert_eq "$(bf fix/q 11)" none origin-only-class
+  assert_eq "$(bf fix/q 17)" "PR list incomplete, an open PR cannot be ruled out" origin-only-note
+}
+
 test_squash_merged_branch_is_merged_by_its_pr() {
   app_with_origin
   git -C "$A" switch -q -c fix/s; commit; git -C "$A" push -q -u origin fix/s

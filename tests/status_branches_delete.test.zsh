@@ -20,6 +20,7 @@ setup_env() {
   forge_pr_rows() {
     [[ -n "${2:-}" && -r "$HOME/prs.all" ]] && cp "$HOME/prs.all" "$2.all"
     [[ -n "${2:-}" && -e "$HOME/prs.truncated" ]] && : > "$2.truncated"
+    [[ -n "${2:-}" && -e "$HOME/prs.open-incomplete" ]] && : > "$2.open-incomplete"
     [[ -r "$HOME/prs" ]] && cat "$HOME/prs"; return 0
   }
   functions[wt_fetch_origin]=$functions[_real_wt_fetch_origin]
@@ -389,6 +390,17 @@ test_open_pr_keeps_origin_even_when_tracked_locally() {
   assert_eq "${$(plan_has safe fix/m local)%%$'\t'*}" safe local-still-planned
   assert_contains "$(git -C "$HOME/remote.git" branch --list feature/z fix/m)" feature/z origin-kept
   assert_contains "$(git -C "$HOME/remote.git" branch --list fix/m)" fix/m merged-origin-kept
+}
+
+test_open_prs_not_all_listed_keep_origin() {
+  app_with_origin
+  merged_branch fix/m
+  mark fix/m
+  : > "$HOME/prs.truncated"; : > "$HOME/prs.open-incomplete"
+  delete_marked y
+  assert_contains "$(plan_has skip fix/m origin)" "PR list incomplete, an open PR cannot be ruled out" origin-skip
+  assert_eq "${$(plan_has safe fix/m local)%%$'\t'*}" safe local-still-planned
+  assert_contains "$(git -C "$HOME/remote.git" branch --list fix/m)" fix/m origin-kept
 }
 
 test_own_branch_without_commits_tracked_locally_is_deleted_from_origin() {
