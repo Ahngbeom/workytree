@@ -85,6 +85,7 @@ _status_unique_repos() {
   for (( j = 1; j <= ${#lines}; j++ )); do
     [[ -n "${lines[$j]}" && "${owner[${keys[$j]}]:-}" == $j ]] && print -r -- "${lines[$j]}"
   done
+  return 0
 }
 
 # _status_collect_one <name> <project> <repo_path> <stale_days> <out_prefix>: one repo's

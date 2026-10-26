@@ -289,4 +289,14 @@ test_linked_worktree_found_by_scan_is_collected_once() {
   assert_eq "${${(@ps:\t:)mains[1]}[3]}" app main-checkout-wins
 }
 
+# Scan order puts z-agent last; dropping it must not fail the whole collection.
+test_duplicate_scanned_last_still_lists_the_repo() {
+  fixture
+  git -C "$HOME/src/app" worktree add -q "$HOME/src/z-agent" -b z-agent
+  load_rows
+  local -a mains; mains=(${(f)"$(print -r -- "$ROWS" | awk -F'\t' '$1=="main"')"})
+  assert_eq "${#mains}" 1 one-main-row
+  assert_eq "${${(@ps:\t:)mains[1]}[3]}" app main-checkout-wins
+}
+
 run_tests

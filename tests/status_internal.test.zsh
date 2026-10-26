@@ -125,6 +125,10 @@ test_unique_repos_keeps_repos_apart_on_old_git() {
   local in=$'awt\tme\t'"$HOME/src/a-wt"$'\na\tme\t'"$HOME/src/a"$'\nb\tme\t'"$HOME/src/b"
   assert_eq "$(_status_unique_repos "$in" | cut -f1 | tr '\n' ' ')" "a b " current-git
   assert_eq "$(old_git; _status_unique_repos "$in" | cut -f1 | tr '\n' ' ')" "a b " old-git
+  in=$'a\tme\t'"$HOME/src/a"$'\nawt\tme\t'"$HOME/src/a-wt"
+  local out; out="$(_status_unique_repos "$in")"
+  assert_eq "$?" 0 duplicate-last-rc
+  assert_eq "${out%%$'\t'*}" a duplicate-last
 }
 
 test_unique_repos_keys_unreadable_lines_by_path() {
