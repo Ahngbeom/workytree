@@ -97,7 +97,7 @@ test_untracked_file_is_dirty_but_idea_only_is_not() {
   assert_eq "$(field fix/IDEA 16)" idea-only
 }
 
-test_gone_upstream_is_safe() {
+test_gone_upstream_unmerged_is_dirty() {
   fixture; with_origin
   wt create app fix GONE main >/dev/null 2>&1
   commit_in "$HOME/wts/app/fix/GONE"
@@ -106,7 +106,7 @@ test_gone_upstream_is_safe() {
   git -C "$HOME/src/app" fetch -q --prune origin
   load_rows
   assert_eq "$(field fix/GONE 15)" 1 gone
-  assert_eq "$(field fix/GONE 9)" safe
+  assert_eq "$(field fix/GONE 9)" dirty
 }
 
 test_ahead_of_upstream_is_dirty() {
@@ -128,16 +128,38 @@ test_locked_worktree_is_never_safe() {
   assert_eq "$(field fix/LOCK 9)" -
 }
 
-test_branch_without_worktree_is_listed_but_base_is_not() {
+test_branch_without_worktree_moves_to_branch_mode() {
   fixture
   git -C "$HOME/src/app" branch lonely
   load_rows
-  assert_eq "$(field lonely 1)" branch
+  assert_eq "$(field lonely 1)" MISSING
+  local plain; plain="$(wt status --offline --plain 2>/dev/null)"
+  assert_eq "${plain//lonely/}" "$plain" "worktree view omits the branch"
+  assert_contains "$(wt status --offline --plain --branches 2>/dev/null)" lonely
   local line n=0
   for line in "${(@f)ROWS}"; do [[ "$line" == *$'\tmain\t'* ]] && (( ++n )); done
   assert_eq "$n" 1 "main appears once (as the main checkout)"
   assert_eq "$(field main 1)" main
   assert_eq "$(field main 9)" -
+}
+
+# collect_with_prs: ROWS = status_collect_repo for app with ~/prs as the PR rows.
+collect_with_prs() {
+  ROWS="$(for f in "$WT_TEST_ROOT"/lib/*.zsh; do source "$f"; done
+    status_collect_repo me app "$HOME/src/app" 30 "$HOME/prs" 2>/dev/null)"
+}
+
+test_merged_pr_counts_only_at_the_pr_head_for_a_worktree() {
+  fixture; with_origin
+  local w="$HOME/wts/app/fix/P"
+  git -C "$HOME/src/app" worktree add -q -b fix/P "$w"
+  commit_in "$w" squashed; git -C "$w" push -q -u origin fix/P
+  print -r -- "fix/P"$'\t'"#5"$'\t'merged$'\t'"https://x/5"$'\t'"$(git -C "$w" rev-parse HEAD)" > "$HOME/prs"
+  collect_with_prs
+  assert_eq "$(field "$w" 9)" safe at-pr-head
+  commit_in "$w" after; git -C "$w" push -q origin fix/P
+  collect_with_prs
+  assert_eq "$(field "$w" 9)" - after-the-pr-head
 }
 
 test_orphan_dir_is_listed_and_left_alone() {
@@ -220,13 +242,21 @@ test_plain_table_when_stdout_is_not_a_terminal() {
 
 test_json_is_valid_and_escapes_branch_names() {
   fixture
-  git -C "$HOME/src/app" branch 'fix/q"x'
+  git -C "$HOME/src/app" worktree add -q "$HOME/wts/app/fix/qx" -b 'fix/q"x'
   local out; out="$(wt status --offline --json)"
   assert_contains "$out" '"branch":"fix/q\"x"'
   if (( $+commands[python3] )); then
     print -r -- "$out" | python3 -c 'import json,sys; json.load(sys.stdin)'
     assert_eq "$?" 0 valid-json
   fi
+}
+
+test_stale_and_json_have_no_branch_rows() {
+  fixture
+  git -C "$HOME/src/app" branch lonely
+  local out; out="$(wt status --offline --stale --json 2>/dev/null)"
+  local pat='"type":"branch"'
+  assert_eq "${out//"$pat"/}" "$out" "no branch rows"
 }
 
 test_stale_days_config_is_used() {
@@ -248,6 +278,25 @@ test_table_colour_follows_the_wrapper_mode() {
   assert_contains "$(WORKYTREE_SHELL=terminal wt status --offline)" "$esc" "terminal"
   local out; out="$(WORKYTREE_SHELL=redirected wt status --offline)"
   assert_eq "${out#*$esc}" "$out" "redirected: no escapes"
+}
+
+test_linked_worktree_found_by_scan_is_collected_once() {
+  fixture
+  git -C "$HOME/src/app" worktree add -q "$HOME/src/agent-x" -b agent-x
+  load_rows
+  local -a mains; mains=(${(f)"$(print -r -- "$ROWS" | awk -F'\t' '$1=="main"')"})
+  assert_eq "${#mains}" 1 one-main-row
+  assert_eq "${${(@ps:\t:)mains[1]}[3]}" app main-checkout-wins
+}
+
+# Scan order puts z-agent last; dropping it must not fail the whole collection.
+test_duplicate_scanned_last_still_lists_the_repo() {
+  fixture
+  git -C "$HOME/src/app" worktree add -q "$HOME/src/z-agent" -b z-agent
+  load_rows
+  local -a mains; mains=(${(f)"$(print -r -- "$ROWS" | awk -F'\t' '$1=="main"')"})
+  assert_eq "${#mains}" 1 one-main-row
+  assert_eq "${${(@ps:\t:)mains[1]}[3]}" app main-checkout-wins
 }
 
 run_tests
