@@ -167,8 +167,12 @@ status_collect_branches() {
   local refs= ref name
   local -A r_sha r_ts r_up r_track r_email r_ahead in_base names
   local -a f
+  local -i no_ab=0
   [[ $base != - ]] && refs="$(git -C "$repo_path" for-each-ref --format="$fmt"$'\t'"%(ahead-behind:$base)" refs/heads refs/remotes/origin 2>/dev/null)"
-  [[ -n $refs ]] || refs="$(git -C "$repo_path" for-each-ref --format="$fmt" refs/heads refs/remotes/origin 2>/dev/null)"
+  if [[ -z $refs ]]; then
+    [[ $base != - ]] && no_ab=1
+    refs="$(git -C "$repo_path" for-each-ref --format="$fmt" refs/heads refs/remotes/origin 2>/dev/null)"
+  fi
   for line in "${(@f)refs}"; do
     [[ -n $line ]] || continue
     f=("${(@ps:\t:)line}")
@@ -246,7 +250,12 @@ status_collect_branches() {
     if [[ $cls != none ]]; then
       for ref in $del_refs; do
         n=${r_ahead[$ref]:-}
-        [[ -n $n ]] || { del_ahead=-; break; }
+        # git < 2.41 has no %(ahead-behind:...): count the local tip, which an equal origin tip shares.
+        if [[ -z $n ]] && (( no_ab )) && [[ $ref == "$lref" || $rsha == "$lsha" ]]; then
+          n="$(git -C "$repo_path" rev-list --count "$lsha" --not "$base" -- 2>/dev/null)" && r_ahead[$lref]=$n
+          [[ $rsha == "$lsha" ]] && r_ahead[$rref]=$n
+        fi
+        [[ $n == <-> ]] || { del_ahead=-; break; }
         if [[ $del_ahead == - ]] || (( n > del_ahead )); then del_ahead=$n; fi
       done
     fi

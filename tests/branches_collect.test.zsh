@@ -190,6 +190,36 @@ test_gone_and_stale_notes_count_commits_not_in_base() {
   assert_eq "$(bf fix/old 5)" "$(print -r -- "${ROWS%%$'\n'*}" | cut -f5)" oldest-first
 }
 
+# git < 2.41 rejects %(ahead-behind:...); local tips are counted one by one, origin-only tips stay unknown.
+test_counts_without_ahead_behind_support() {
+  app_with_origin
+  git -C "$A" switch -q -c fix/g; commit; commit; git -C "$A" push -q -u origin fix/g
+  git -C "$A" push -q origin --delete fix/g
+  git -C "$A" switch -q -c fix/s main
+  GIT_COMMITTER_DATE="@$(( EPOCHSECONDS - 100 * 86400 )) +0000" commit
+  git -C "$A" push -q -u origin fix/s
+  git -C "$A" switch -q -c fix/r main
+  GIT_COMMITTER_DATE="@$(( EPOCHSECONDS - 100 * 86400 )) +0000" commit
+  git -C "$A" push -q -u origin fix/r
+  git -C "$A" switch -q main; git -C "$A" branch -q -D fix/r
+  git -C "$A" switch -q -c fix/d main
+  GIT_COMMITTER_DATE="@$(( EPOCHSECONDS - 100 * 86400 )) +0000" commit
+  git -C "$A" push -q -u origin fix/d
+  GIT_COMMITTER_DATE="@$(( EPOCHSECONDS - 100 * 86400 )) +0000" commit
+  git -C "$A" switch -q main
+  git() { [[ "$*" == *ahead-behind* ]] && { print -u2 "fatal: unknown field name: ahead-behind"; return 128; }; command git "$@"; }
+  collect
+  unfunction git
+  assert_eq "$(bf fix/g 13)" 2 local-only
+  assert_eq "$(bf fix/g 17)" "upstream deleted, 2 commits not in origin/main" local-note
+  assert_eq "$(bf fix/s 11)" force same-tip-class
+  assert_eq "$(bf fix/s 13)" 1 same-tip
+  assert_eq "$(bf fix/r 11)" force origin-only-class
+  assert_eq "$(bf fix/r 13)" - origin-only
+  assert_eq "$(bf fix/d 11)" force diverged-class
+  assert_eq "$(bf fix/d 13)" - diverged-origin-unknown
+}
+
 # backup_branch: backup/AB-1-pre-squash with a commit of its own, no origin.
 backup_branch() {
   make_repo "$A"
